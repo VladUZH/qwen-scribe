@@ -1,5 +1,5 @@
 #!/bin/bash
-# Qwen Scribe launcher — starts the local server and desktop dictation helper.
+# Qwen Scribe server launcher — invoked by the native main app process.
 set -u
 
 # Finder starts apps with a minimal PATH.
@@ -13,10 +13,7 @@ APP_SUPPORT="$HOME/Library/Application Support/Qwen Scribe"
 RUNTIME_DIR="$APP_SUPPORT/runtime"
 VENV_DIR="$RUNTIME_DIR/.venv"
 PIDFILE="$APP_SUPPORT/server.pid"
-DICTATION_PIDFILE="$APP_SUPPORT/dictation.pid"
-MACOS_DIR="$(cd "$(dirname "$0")" && pwd)"
-RESOURCES_DIR="$(cd "$MACOS_DIR/../Resources" 2>/dev/null && pwd)"
-DICTATION_HELPER="$MACOS_DIR/QwenScribeDictation"
+RESOURCES_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 dialog() {
   /usr/bin/osascript - "$1" >/dev/null 2>&1 << 'APPLESCRIPT'
@@ -56,29 +53,6 @@ server_up() {
   curl -s -m 2 "$URL/api/config" 2>/dev/null | grep -q '"models"'
 }
 
-start_dictation_helper() {
-  if [ -f "$DICTATION_PIDFILE" ]; then
-    local existing_pid
-    existing_pid="$(cat "$DICTATION_PIDFILE" 2>/dev/null)"
-    if [ -n "$existing_pid" ] && kill -0 "$existing_pid" >/dev/null 2>&1; then
-      local existing_command
-      existing_command="$(ps -p "$existing_pid" -o command= 2>/dev/null || true)"
-      case "$existing_command" in
-        *QwenScribeDictation*) return 0 ;;
-      esac
-    fi
-    rm -f "$DICTATION_PIDFILE"
-  fi
-
-  if [ ! -x "$DICTATION_HELPER" ]; then
-    echo "Desktop dictation helper is missing; file transcription remains available." >> "$LOG"
-    return 0
-  fi
-
-  nohup "$DICTATION_HELPER" >> "$LOG" 2>&1 &
-  echo $! > "$DICTATION_PIDFILE"
-}
-
 find_python() {
   local candidates=(
     /opt/homebrew/bin/python3
@@ -107,7 +81,6 @@ find_python() {
 }
 
 if server_up; then
-  start_dictation_helper
   open "$URL"
   exit 0
 fi
@@ -188,7 +161,6 @@ echo $! > "$PIDFILE"
 
 for _ in $(seq 1 60); do
   if server_up; then
-    start_dictation_helper
     open "$URL"
     /usr/bin/osascript -e 'display notification "Ready — hold Right Command to dictate anywhere." with title "Qwen Scribe"' 2>/dev/null
     exit 0

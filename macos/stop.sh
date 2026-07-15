@@ -17,7 +17,9 @@ stop_known_process() {
   pid="$(cat "$pidfile" 2>/dev/null)"
   command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
   case "$command" in
-    *"/Library/Application Support/Qwen Scribe/"*|*QwenScribeDictation*)
+    *"/Library/Application Support/Qwen Scribe/"*|\
+    *"/Qwen Scribe.app/Contents/MacOS/QwenScribe"*|\
+    *QwenScribeDictation*)
       kill "$pid" >/dev/null 2>&1 || true
       rm -f "$pidfile"
       return 0

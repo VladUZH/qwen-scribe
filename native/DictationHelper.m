@@ -218,9 +218,55 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 
 @implementation QSDictationDelegate
 
+- (NSString *)dictationPIDFile {
+    NSString *support = [NSHomeDirectory() stringByAppendingPathComponent:
+        @"Library/Application Support/Qwen Scribe"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:support
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+    return [support stringByAppendingPathComponent:@"dictation.pid"];
+}
+
+- (void)writeProcessIdentity {
+    NSString *pid = [NSString stringWithFormat:@"%d\n", NSProcessInfo.processInfo.processIdentifier];
+    [pid writeToFile:[self dictationPIDFile]
+          atomically:YES
+            encoding:NSUTF8StringEncoding
+               error:nil];
+}
+
+- (void)removeProcessIdentity {
+    NSString *path = [self dictationPIDFile];
+    NSString *recorded = [NSString stringWithContentsOfFile:path
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:nil];
+    if (recorded.integerValue == NSProcessInfo.processInfo.processIdentifier) {
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    }
+}
+
+- (void)launchLocalServer {
+    NSString *script = [NSBundle.mainBundle pathForResource:@"launch-server" ofType:@"sh"];
+    if (!script) {
+        [self reportFailure:@"The local server launcher is missing"];
+        return;
+    }
+
+    NSTask *task = [[NSTask alloc] init];
+    task.executableURL = [NSURL fileURLWithPath:@"/bin/bash"];
+    task.arguments = @[script];
+    NSError *error = nil;
+    if (![task launchAndReturnError:&error]) {
+        [self reportFailure:[NSString stringWithFormat:@"Could not start the local server: %@",
+                             error.localizedDescription ?: @"unknown error"]];
+    }
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
     self.hud = [[QSDictationHUD alloc] init];
+    [self writeProcessIdentity];
 
     NSDictionary *accessibilityOptions = @{
         (__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES
@@ -248,6 +294,8 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
                                                             block:^(NSTimer *timer) {
         [weakSelf sendHeartbeat];
     }];
+
+    [self launchLocalServer];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
@@ -259,6 +307,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     if (self.recordingURL) {
         [[NSFileManager defaultManager] removeItemAtURL:self.recordingURL error:nil];
     }
+    [self removeProcessIdentity];
 }
 
 - (void)requestMicrophoneAccess {

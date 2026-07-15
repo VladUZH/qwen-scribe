@@ -113,10 +113,13 @@ make app         # build ad-hoc-signed app bundles in dist/
 make package     # create a beta release zip in dist/
 ```
 
-`make app` compiles `native/DictationHelper.m` for arm64, embeds tracked server
-sources into the app bundle, validates its property lists, signs it, and verifies
-the result. Set `CODESIGN_IDENTITY` to a Developer ID identity for a release
-build; notarization is intentionally a separate release-owner step.
+`make app` compiles `native/DictationHelper.m` as the arm64 bundle executable,
+embeds the server launcher and tracked sources as signed resources, validates
+its property lists, signs it, and verifies the result. Keeping the
+privacy-sensitive recorder as the bundle executable gives macOS one stable app
+identity for Accessibility, Input Monitoring, and Microphone access. Set
+`CODESIGN_IDENTITY` to a Developer ID identity for a release build; notarization
+is intentionally a separate release-owner step.
 
 ### Optional 8-bit conversion
 
