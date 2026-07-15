@@ -13,6 +13,12 @@ details when clearly documented.
 - Privacy, security, contribution, conduct, license, and third-party notices
 - Local Host-header, cross-origin request, and browser security-header protection
 
+### Fixed
+
+- Made the native recorder the app bundle's declared main executable so macOS
+  Accessibility, Input Monitoring, and Microphone permissions persist across
+  normal stop/start cycles
+
 ### Changed
 
 - Added reviewed direct dependencies and a fully resolved runtime lock

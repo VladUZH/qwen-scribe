@@ -48,6 +48,7 @@ jobs:
         run: |
           plutil -lint "dist/Qwen Scribe.app/Contents/Info.plist"
           plutil -lint "dist/Stop Qwen Scribe.app/Contents/Info.plist"
-          file "dist/Qwen Scribe.app/Contents/MacOS/QwenScribeDictation" | grep arm64
+          file "dist/Qwen Scribe.app/Contents/MacOS/QwenScribe" | grep arm64
+          test ! -e "dist/Qwen Scribe.app/Contents/MacOS/QwenScribeDictation"
           codesign --verify --deep --strict "dist/Qwen Scribe.app"
           codesign --verify --strict "dist/Stop Qwen Scribe.app"

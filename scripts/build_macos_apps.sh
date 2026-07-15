@@ -22,7 +22,7 @@ fi
 rm -rf "$APP" "$STOP_APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/static" "$STOP_APP/Contents/MacOS"
 
-cp "$ROOT/macos/launcher.sh" "$APP/Contents/MacOS/QwenScribe"
+cp "$ROOT/macos/launcher.sh" "$APP/Contents/Resources/launch-server.sh"
 cp "$ROOT/macos/QwenScribe-Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/server.py" "$ROOT/requirements.txt" "$ROOT/requirements-lock.txt" "$APP/Contents/Resources/"
 cp -R "$ROOT/static/." "$APP/Contents/Resources/static/"
@@ -30,13 +30,13 @@ cp -R "$ROOT/static/." "$APP/Contents/Resources/static/"
 cp "$ROOT/macos/stop.sh" "$STOP_APP/Contents/MacOS/StopQwenScribe"
 cp "$ROOT/macos/StopQwenScribe-Info.plist" "$STOP_APP/Contents/Info.plist"
 
-chmod +x "$APP/Contents/MacOS/QwenScribe" "$STOP_APP/Contents/MacOS/StopQwenScribe"
+chmod +x "$APP/Contents/Resources/launch-server.sh" "$STOP_APP/Contents/MacOS/StopQwenScribe"
 
 clang -fobjc-arc -arch arm64 -mmacosx-version-min=14.0 -Wall -Wextra \
   -Wno-unused-parameter \
   -framework Cocoa -framework ApplicationServices -framework AVFoundation \
   -framework AudioToolbox \
-  "$ROOT/native/DictationHelper.m" -o "$APP/Contents/MacOS/QwenScribeDictation"
+  "$ROOT/native/DictationHelper.m" -o "$APP/Contents/MacOS/QwenScribe"
 
 for plist in "$APP/Contents/Info.plist" "$STOP_APP/Contents/Info.plist"; do
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$plist"
@@ -45,15 +45,25 @@ for plist in "$APP/Contents/Info.plist" "$STOP_APP/Contents/Info.plist"; do
 done
 
 if [[ "$IDENTITY" == "-" ]]; then
-  codesign --force --deep --sign - "$APP"
+  codesign --force --sign - "$APP"
   codesign --force --sign - "$STOP_APP"
 else
-  codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$APP"
+  codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
   codesign --force --options runtime --timestamp --sign "$IDENTITY" "$STOP_APP"
 fi
 
 codesign --verify --deep --strict "$APP"
 codesign --verify --strict "$STOP_APP"
+
+MAIN_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
+if [[ "$MAIN_EXECUTABLE" != "QwenScribe" ]] || ! file "$APP/Contents/MacOS/$MAIN_EXECUTABLE" | grep -q 'Mach-O 64-bit executable arm64'; then
+  echo "The privacy-sensitive native process is not the arm64 bundle executable." >&2
+  exit 1
+fi
+if [[ -e "$APP/Contents/MacOS/QwenScribeDictation" ]]; then
+  echo "Unexpected legacy nested dictation executable." >&2
+  exit 1
+fi
 
 echo "Built:"
 echo "  $APP"
