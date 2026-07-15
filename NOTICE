@@ -1,0 +1,11 @@
+Qwen Scribe
+Copyright 2026 Qwen Scribe contributors
+
+This product uses Qwen3-ASR model weights developed by the Qwen team at
+Alibaba Cloud and the mlx-qwen3-asr Apple Silicon implementation. Both are
+available under the Apache License 2.0. Model weights are downloaded separately
+and are not included in the Qwen Scribe source repository or release archive.
+
+Qwen and Qwen3-ASR names may be trademarks of their respective owners.
+Qwen Scribe is an independent community project and is not affiliated with,
+endorsed by, or sponsored by Alibaba Cloud or Apple Inc.

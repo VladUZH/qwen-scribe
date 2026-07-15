@@ -1,0 +1,27 @@
+# macOS and editor metadata
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Qwen Scribe runtime and generated data
+.build/
+dist/
+models/
+*.app/
+.server.pid
+*.pid
+*.log
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example

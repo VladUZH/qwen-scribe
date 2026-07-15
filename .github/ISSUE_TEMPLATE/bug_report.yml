@@ -1,0 +1,65 @@
+name: Bug report
+description: Report a reproducible problem with transcription, history, setup, or dictation.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve Qwen Scribe. Remove private transcript text, filenames, paths, and clipboard contents before posting logs. Security vulnerabilities belong in a private report under the Security tab.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - App setup or launch
+        - File transcription
+        - Transcript history
+        - Desktop dictation
+        - Floating HUD
+        - Build or development
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Qwen Scribe version or commit
+      placeholder: v0.1.0-beta.1 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Mac and macOS version
+      placeholder: M2 Pro, macOS 15.5
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: Tell us exactly what you did and what happened.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized log excerpt
+      description: Include only the relevant lines from ~/Library/Logs/QwenScribe.log.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I removed private audio, transcript, path, and clipboard data.
+          required: true
+        - label: I searched existing issues for this problem.
+          required: true

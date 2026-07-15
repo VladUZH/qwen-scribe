@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Qwen Scribe — local transcription</title>
+<style>
+  :root {
+    --bg: #0F0E16;
+    --panel: #171624;
+    --panel-2: #1D1B2E;
+    --line: #2A2840;
+    --text: #EDEBF6;
+    --muted: #8B87A6;
+    --amber: #F9A03F;
+    --magenta: #C9366F;
+    --indigo: #46237A;
+    --ok: #6FCF97;
+    --err: #E5636F;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { color-scheme: dark; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 96px; }
+
+  /* Header */
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 40px; }
+  .wordmark {
+    font-family: ui-serif, Georgia, serif;
+    font-size: 28px;
+    font-weight: 560;
+    letter-spacing: -0.01em;
+  }
+  .wordmark em {
+    font-style: normal;
+    background: linear-gradient(90deg, var(--magenta), var(--amber));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .runtime {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+
+  /* Drop zone */
+  .drop {
+    border: 1.5px dashed var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+    padding: 52px 32px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease;
+  }
+  .drop:hover, .drop:focus-visible { border-color: var(--amber); outline: none; }
+  .drop.dragover { border-color: var(--amber); background: var(--panel-2); }
+  .drop h2 { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+  .drop p { color: var(--muted); font-size: 13.5px; }
+  .drop .formats { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; margin-top: 14px; color: var(--muted); }
+  input[type=file] { display: none; }
+
+  /* Options */
+  .options {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+    margin-top: 16px;
+  }
+  .field label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  select, input[type=text] {
+    width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    color: var(--text);
+    font: inherit;
+    font-size: 13.5px;
+    padding: 9px 10px;
+  }
+  select:focus, input[type=text]:focus { border-color: var(--amber); outline: none; }
+  .field-wide { grid-column: 1 / -1; }
+  .check { display: flex; align-items: center; gap: 8px; padding-top: 26px; }
+  .check input { accent-color: var(--amber); width: 16px; height: 16px; }
+  .check span { font-size: 13.5px; }
+
+  /* Desktop dictation */
+  .dictation {
+    margin-top: 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: linear-gradient(120deg, rgba(70,35,122,.22), rgba(201,54,111,.08));
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 15px 17px;
+  }
+  .dictation-copy { flex: 1; min-width: 0; }
+  .dictation-title { display: flex; align-items: center; gap: 9px; font-size: 13.5px; font-weight: 600; }
+  .dictation-copy p { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-top: 3px; }
+  .dictation-status { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+  .dictation-status::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: 1px; }
+  .dictation-status.ready { color: var(--ok); }
+  .dictation-status.ready::before { background: var(--ok); }
+  .dictation-status.needs-permission { color: var(--amber); }
+  .dictation-status.needs-permission::before { background: var(--amber); }
+  kbd { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 3px 7px; white-space: nowrap; }
+
+  /* Job card */
+  .job {
+    margin-top: 28px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    display: none;
+  }
+  .job.visible { display: block; }
+  .job-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 14px; }
+  .job-file { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+  .job-status { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+  .job-status.done { color: var(--ok); }
+  .job-status.error { color: var(--err); }
+
+  /* Signature: mel-spectrogram progress strip */
+  .spectro {
+    display: flex;
+    gap: 2px;
+    height: 44px;
+    align-items: flex-end;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .spectro span {
+    flex: 1;
+    background: var(--line);
+    border-radius: 1.5px;
+    transition: background 240ms ease;
+    min-height: 12%;
+  }
+  .spectro span.lit { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.35); } }
+  @media (prefers-reduced-motion: reduce) {
+    .spectro span.lit { animation: none; }
+  }
+  .job-detail { margin-top: 10px; font-size: 12.5px; color: var(--muted); }
+  .job-error { margin-top: 10px; font-size: 13px; color: var(--err); overflow-wrap: anywhere; }
+
+  /* Transcript */
+  .transcript { margin-top: 28px; display: none; }
+  .transcript.visible { display: block; }
+  .t-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .t-meta { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11.5px; color: var(--muted); }
+  .t-actions { display: flex; gap: 8px; }
+  button.act {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    border-radius: 8px;
+    padding: 7px 13px;
+    cursor: pointer;
+    transition: border-color 140ms ease;
+  }
+  button.act:hover, button.act:focus-visible { border-color: var(--amber); outline: none; }
+  button.act.danger { color: var(--err); }
+  button.act:disabled { cursor: default; opacity: .45; }
+  button.act:disabled:hover { border-color: var(--line); }
+  .t-body {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 26px 28px;
+    font-size: 14px;
+    line-height: 1.68;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: text;
+  }
+  .t-note { margin-top: 10px; font-size: 12px; color: var(--muted); }
+
+  /* Saved transcripts */
+  .history { margin-top: 52px; padding-top: 28px; border-top: 1px solid var(--line); }
+  .history-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+  .history-title { display: flex; align-items: baseline; gap: 9px; }
+  .history h2 { font-size: 16px; font-weight: 600; }
+  .history-count { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); }
+  .history-list { display: grid; gap: 10px; }
+  .history-empty { color: var(--muted); font-size: 13px; text-align: center; background: var(--panel); border: 1px dashed var(--line); border-radius: var(--radius); padding: 28px 18px; }
+  .history-item { background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 15px 16px; }
+  .history-item-head { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; }
+  .history-file { font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+  .history-date { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+  .history-preview { color: #B8B4CA; font-size: 12.5px; line-height: 1.55; margin-top: 7px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .history-foot { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 11px; }
+  .history-meta { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; color: var(--muted); font-size: 10.5px; }
+  .history-actions { display: flex; gap: 7px; }
+  .history-actions .act { padding: 5px 10px; font-size: 11.5px; }
+
+  @media (max-width: 560px) {
+    .options { grid-template-columns: 1fr 1fr; }
+    .check { padding-top: 0; grid-column: 1 / -1; }
+    .t-head { flex-direction: column; align-items: flex-start; gap: 10px; }
+    .dictation { align-items: flex-start; }
+    .dictation-status { display: none; }
+    .history-item-head, .history-foot { align-items: flex-start; }
+    .history-foot { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="wordmark">Qwen <em>Scribe</em></div>
+    <div class="runtime" id="runtime">Qwen3-ASR · MLX · Metal</div>
+  </header>
+
+  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload audio or video file">
+    <h2>Drop audio or video here</h2>
+    <p>or click to choose a file — everything runs locally on this Mac</p>
+    <div class="formats">wav · mp3 · m4a · flac · ogg · qta · mp4 · mov · mkv · webm</div>
+  </div>
+  <input type="file" id="file" accept="audio/*,video/*,.mkv,.opus,.qta">
+
+  <div class="options">
+    <div class="field">
+      <label for="model">Model</label>
+      <select id="model">
+        <option value="1.7b">1.7B — accuracy</option>
+        <option value="0.6b">0.6B — speed</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="language">Language</label>
+      <select id="language"></select>
+    </div>
+    <div class="check">
+      <input type="checkbox" id="timestamps">
+      <span>Word timestamps (enables .srt)</span>
+    </div>
+    <div class="check" id="turboWrap">
+      <input type="checkbox" id="turbo">
+      <span>Turbo — speculative decoding (0.6B drafts, 1.7B verifies; same quality, uses more GPU)</span>
+    </div>
+    <div class="field field-wide">
+      <label for="context">Domain vocabulary <span style="text-transform:none;font-weight:400">(optional — space-separated terms, e.g. "EBITDA CapEx ESG")</span></label>
+      <input type="text" id="context" placeholder="Rare names and terms the audio contains">
+    </div>
+  </div>
+
+  <div class="dictation" aria-live="polite">
+    <kbd>Right ⌘</kbd>
+    <div class="dictation-copy">
+      <div class="dictation-title">Desktop dictation</div>
+      <p>Hold in any text field to record; release to transcribe and paste. macOS may ask for Microphone, Accessibility, and Input Monitoring access.</p>
+    </div>
+    <div class="dictation-status" id="dictationStatus">starting</div>
+  </div>
+
+  <div class="job" id="job">
+    <div class="job-head">
+      <div class="job-file" id="jobFile"></div>
+      <div class="job-status" id="jobStatus"></div>
+    </div>
+    <div class="spectro" id="spectro" aria-hidden="true"></div>
+    <div class="job-detail" id="jobDetail"></div>
+    <div class="job-error" id="jobError"></div>
+  </div>
+
+  <div class="transcript" id="transcript">
+    <div class="t-head">
+      <div class="t-meta" id="tMeta"></div>
+      <div class="t-actions">
+        <button class="act" id="btnCopy">Copy text</button>
+        <button class="act" id="btnTxt">Download .txt</button>
+        <button class="act" id="btnSrt" hidden>Download .srt</button>
+      </div>
+    </div>
+    <div class="t-body" id="tBody"></div>
+    <div class="t-note" id="tNote"></div>
+  </div>
+
+  <section class="history" aria-labelledby="historyHeading">
+    <div class="history-head">
+      <div class="history-title">
+        <h2 id="historyHeading">Saved transcripts</h2>
+        <span class="history-count" id="historyCount"></span>
+      </div>
+      <button class="act danger" id="btnDeleteAll" hidden>Delete all</button>
+    </div>
+    <div class="history-list" id="historyList">
+      <div class="history-empty">Loading saved transcripts…</div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const BARS = 64;
+  const spectro = $("spectro");
+  // Magma-style gradient across bars: indigo -> magenta -> amber.
+  const stops = [[70,35,122],[201,54,111],[249,160,63]];
+  const lerp = (a,b,t) => Math.round(a+(b-a)*t);
+  const colorAt = t => {
+    const seg = t < 0.5 ? 0 : 1, u = (t - seg*0.5) / 0.5;
+    const [c1,c2] = [stops[seg], stops[seg+1]];
+    return `rgb(${lerp(c1[0],c2[0],u)},${lerp(c1[1],c2[1],u)},${lerp(c1[2],c2[2],u)})`;
+  };
+  // Fixed pseudo-random bar heights (looks like a spectrogram, stable per load).
+  const heights = Array.from({length: BARS}, (_, i) =>
+    18 + 72 * Math.abs(Math.sin(i * 1.7) * Math.cos(i * 0.63)));
+  for (let i = 0; i < BARS; i++) {
+    const bar = document.createElement("span");
+    bar.style.height = heights[i].toFixed(0) + "%";
+    spectro.appendChild(bar);
+  }
+  const bars = [...spectro.children];
+
+  function paintProgress(p, active) {
+    const lit = Math.round(p * BARS);
+    bars.forEach((b, i) => {
+      if (i < lit) {
+        b.style.background = colorAt(i / (BARS - 1));
+        b.classList.toggle("lit", active && i >= lit - 4);
+      } else {
+        b.style.background = "var(--line)";
+        b.classList.remove("lit");
+      }
+    });
+  }
+
+  let currentFile = null;
+  let pollTimer = null;
+  let lastResult = null;
+  let baseName = "transcript";
+  let activeTranscriptId = null;
+
+  fetch("/api/config").then(r => r.json()).then(cfg => {
+    const sel = $("language");
+    cfg.languages.forEach(l => {
+      const o = document.createElement("option");
+      o.value = l;
+      o.textContent = l === "auto" ? "Auto-detect" : l;
+      sel.appendChild(o);
+    });
+    sel.value = cfg.languages.includes("English") ? "English" : "auto";
+    $("model").value = cfg.default_model;
+    if (cfg.quantized) {
+      $("runtime").textContent = "Qwen3-ASR · MLX · Metal · 8-bit";
+      $("model").options[0].textContent = "1.7B — accuracy (8-bit)";
+    }
+    if (!cfg.ffmpeg) {
+      $("runtime").textContent = "ffmpeg missing — run: brew install ffmpeg";
+      $("runtime").style.color = "var(--err)";
+    }
+  });
+
+  const drop = $("drop");
+  drop.addEventListener("click", () => $("file").click());
+  drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } });
+  ["dragover","dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("dragover"); }));
+  ["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("dragover"); }));
+  drop.addEventListener("drop", e => { if (e.dataTransfer.files[0]) submit(e.dataTransfer.files[0]); });
+  $("file").addEventListener("change", e => { if (e.target.files[0]) submit(e.target.files[0]); });
+
+  async function submit(file) {
+    currentFile = file;
+    baseName = file.name.replace(/\.[^.]+$/, "") || "transcript";
+    $("job").classList.add("visible");
+    $("transcript").classList.remove("visible");
+    $("jobFile").textContent = file.name;
+    $("jobStatus").textContent = "uploading";
+    $("jobStatus").className = "job-status";
+    $("jobDetail").textContent = "";
+    $("jobError").textContent = "";
+    paintProgress(0, false);
+    if (pollTimer) clearInterval(pollTimer);
+
+    const form = new FormData();
+    form.append("file", file);
+    form.append("model", $("model").value);
+    form.append("language", $("language").value);
+    form.append("timestamps", $("timestamps").checked);
+    form.append("turbo", $("turbo").checked && $("model").value === "1.7b");
+    form.append("context", $("context").value);
+
+    let res;
+    try {
+      res = await fetch("/api/jobs", { method: "POST", body: form });
+    } catch {
+      return fail("Server unreachable. Is server.py still running?");
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return fail(body.detail || `Upload failed (${res.status})`);
+    }
+    const { id } = await res.json();
+    pollTimer = setInterval(() => poll(id), 800);
+  }
+
+  async function poll(id) {
+    let job;
+    try {
+      job = await (await fetch(`/api/jobs/${id}`)).json();
+    } catch { return; }
+
+    $("jobStatus").textContent = job.status;
+    $("jobDetail").textContent = job.detail || "";
+
+    if (job.status === "processing" || job.status === "loading" || job.status === "queued") {
+      paintProgress(job.progress || 0, true);
+      if (job.partial) {
+        $("transcript").classList.add("visible");
+        $("tMeta").textContent = "live transcript — updating as chunks finish";
+        $("tBody").textContent = job.partial;
+        ["btnCopy","btnTxt","btnSrt"].forEach(b => $(b).hidden = true);
+      }
+    }
+    if (job.status === "done") {
+      clearInterval(pollTimer);
+      paintProgress(1, false);
+      $("jobStatus").classList.add("done");
+      const secs = job.finished_at && job.started_at ? (job.finished_at - job.started_at).toFixed(1) : null;
+      $("jobDetail").textContent = secs ? `Finished in ${secs}s` : "Finished";
+      showResult(job.result, {
+        id: job.id,
+        filename: job.filename,
+        finishedAt: job.finished_at,
+        historySaved: job.history_saved,
+        historyError: job.history_error,
+      });
+      if (job.history_saved) loadHistory();
+    }
+    if (job.status === "error") {
+      clearInterval(pollTimer);
+      fail(job.detail || "Transcription failed");
+    }
+  }
+
+  function fail(msg) {
+    if (pollTimer) clearInterval(pollTimer);
+    $("jobStatus").textContent = "error";
+    $("jobStatus").className = "job-status error";
+    $("jobError").textContent = msg;
+    paintProgress(0, false);
+  }
+
+  $("model").addEventListener("change", () => {
+    const is06 = $("model").value === "0.6b";
+    $("turbo").disabled = is06;
+    $("turboWrap").style.opacity = is06 ? 0.4 : 1;
+  });
+
+  function showResult(result, details = {}) {
+    lastResult = result;
+    activeTranscriptId = details.id || null;
+    if (details.filename) {
+      baseName = details.filename.replace(/\.[^.]+$/, "") || "transcript";
+    }
+    $("transcript").classList.add("visible");
+    $("btnCopy").hidden = false;
+    $("btnTxt").hidden = false;
+    $("tBody").textContent = result.text || "(no speech detected)";
+    const words = (result.text || "").split(/\s+/).filter(Boolean).length;
+    const meta = [];
+    if (details.filename) meta.push(details.filename);
+    meta.push(`language: ${result.language || "?"}`, `${words} words`);
+    $("tMeta").textContent = meta.join(" · ");
+    $("btnSrt").hidden = !(result.segments && result.segments.length);
+    const notes = [];
+    if (details.historySaved !== false) notes.push("Saved automatically to transcript history.");
+    if (details.historyError) notes.push(details.historyError);
+    if (result.truncated) notes.push("One chunk hit its decode limit — very long noisy sections may be incomplete.");
+    $("tNote").textContent = notes.join(" ");
+    if (details.scroll !== false) {
+      $("transcript").scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
+  $("btnCopy").addEventListener("click", async () => {
+    await navigator.clipboard.writeText(lastResult?.text || "");
+    $("btnCopy").textContent = "Copied";
+    setTimeout(() => $("btnCopy").textContent = "Copy text", 1400);
+  });
+
+  const download = (name, content, type) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([content], { type }));
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  $("btnTxt").addEventListener("click", () =>
+    download(`${baseName}.txt`, lastResult?.text || "", "text/plain"));
+
+  // Build SRT cues from word-level segments: break on long pauses,
+  // ~42 chars, or 6 s per cue.
+  $("btnSrt").addEventListener("click", () => {
+    const words = lastResult?.segments || [];
+    const cues = [];
+    let cue = null;
+    for (const w of words) {
+      const startNew = !cue
+        || (w.start - cue.end) > 0.9
+        || (cue.text.length + w.text.length) > 42
+        || (w.end - cue.start) > 6;
+      if (startNew) { if (cue) cues.push(cue); cue = { start: w.start, end: w.end, text: w.text }; }
+      else { cue.end = w.end; cue.text += (w.text.startsWith("'") ? "" : " ") + w.text; }
+    }
+    if (cue) cues.push(cue);
+    const ts = s => {
+      const ms = Math.round(s * 1000);
+      const p = (n, l = 2) => String(n).padStart(l, "0");
+      return `${p(Math.floor(ms/3600000))}:${p(Math.floor(ms/60000)%60)}:${p(Math.floor(ms/1000)%60)},${p(ms%1000,3)}`;
+    };
+    const srt = cues.map((c, i) => `${i+1}\n${ts(c.start)} --> ${ts(c.end)}\n${c.text.trim()}\n`).join("\n");
+    download(`${baseName}.srt`, srt, "text/plain");
+  });
+
+  const formatDate = timestamp => {
+    if (!timestamp) return "Unknown date";
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium", timeStyle: "short"
+    }).format(new Date(timestamp * 1000));
+  };
+
+  const makeButton = (label, className = "") => {
+    const button = document.createElement("button");
+    button.className = `act ${className}`.trim();
+    button.textContent = label;
+    return button;
+  };
+
+  async function openTranscript(id) {
+    let response;
+    try {
+      response = await fetch(`/api/transcripts/${id}`);
+    } catch {
+      return;
+    }
+    if (!response.ok) {
+      await loadHistory();
+      return;
+    }
+    const transcript = await response.json();
+    showResult(transcript.result || {}, {
+      id: transcript.id,
+      filename: transcript.filename,
+      finishedAt: transcript.finished_at,
+      historySaved: true,
+    });
+  }
+
+  async function deleteTranscript(id, filename) {
+    if (!confirm(`Delete the saved transcript for “${filename}”?`)) return;
+    const response = await fetch(`/api/transcripts/${id}`, { method: "DELETE" });
+    if (response.ok) {
+      if (activeTranscriptId === id) {
+        activeTranscriptId = null;
+        $("transcript").classList.remove("visible");
+      }
+      await loadHistory();
+    }
+  }
+
+  async function loadHistory() {
+    const list = $("historyList");
+    let response;
+    try {
+      response = await fetch("/api/transcripts");
+    } catch {
+      list.replaceChildren();
+      const empty = document.createElement("div");
+      empty.className = "history-empty";
+      empty.textContent = "Saved transcripts are temporarily unavailable.";
+      list.appendChild(empty);
+      return;
+    }
+    if (!response.ok) return;
+    const { transcripts = [] } = await response.json();
+    $("historyCount").textContent = transcripts.length ? String(transcripts.length) : "";
+    $("btnDeleteAll").hidden = transcripts.length === 0;
+    list.replaceChildren();
+
+    if (!transcripts.length) {
+      const empty = document.createElement("div");
+      empty.className = "history-empty";
+      empty.textContent = "Completed transcripts will be saved here automatically.";
+      list.appendChild(empty);
+      return;
+    }
+
+    for (const item of transcripts) {
+      const card = document.createElement("article");
+      card.className = "history-item";
+
+      const head = document.createElement("div");
+      head.className = "history-item-head";
+      const filename = document.createElement("div");
+      filename.className = "history-file";
+      filename.textContent = item.filename;
+      const date = document.createElement("div");
+      date.className = "history-date";
+      date.textContent = formatDate(item.finished_at || item.created_at);
+      head.append(filename, date);
+
+      const preview = document.createElement("div");
+      preview.className = "history-preview";
+      preview.textContent = item.preview || "(no speech detected)";
+
+      const foot = document.createElement("div");
+      foot.className = "history-foot";
+      const meta = document.createElement("div");
+      meta.className = "history-meta";
+      meta.textContent = [item.language || "language ?", `${item.word_count || 0} words`, item.model || null].filter(Boolean).join(" · ");
+      const actions = document.createElement("div");
+      actions.className = "history-actions";
+      const open = makeButton("Open");
+      open.addEventListener("click", () => openTranscript(item.id));
+      const remove = makeButton("Delete", "danger");
+      remove.addEventListener("click", () => deleteTranscript(item.id, item.filename));
+      actions.append(open, remove);
+      foot.append(meta, actions);
+
+      card.append(head, preview, foot);
+      list.appendChild(card);
+    }
+  }
+
+  $("btnDeleteAll").addEventListener("click", async () => {
+    if (!confirm("Delete every saved transcript? This cannot be undone.")) return;
+    const response = await fetch("/api/transcripts", { method: "DELETE" });
+    if (response.ok) {
+      activeTranscriptId = null;
+      $("transcript").classList.remove("visible");
+      await loadHistory();
+    }
+  });
+
+  async function refreshDictationStatus() {
+    const status = $("dictationStatus");
+    try {
+      const response = await fetch("/api/dictation/status");
+      if (!response.ok) throw new Error();
+      const state = await response.json();
+      let message = "not running";
+      let ready = false;
+      let needsPermission = false;
+      if (state.available) {
+        if (state.microphone === false) {
+          message = "microphone access needed";
+          needsPermission = true;
+        } else if (state.input_monitoring === false) {
+          message = "input monitoring needed";
+          needsPermission = true;
+        } else if (state.accessibility === false) {
+          message = "accessibility access needed";
+          needsPermission = true;
+        } else if (state.microphone && state.input_monitoring && state.accessibility) {
+          message = "ready";
+          ready = true;
+        } else {
+          message = "checking permissions";
+        }
+      }
+      status.textContent = message;
+      status.classList.toggle("ready", ready);
+      status.classList.toggle("needs-permission", needsPermission);
+    } catch {
+      status.textContent = "not running";
+      status.classList.remove("ready");
+      status.classList.remove("needs-permission");
+    }
+  }
+
+  loadHistory();
+  refreshDictationStatus();
+  setInterval(refreshDictationStatus, 5000);
+})();
+</script>
+</body>
+</html>
