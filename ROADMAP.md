@@ -9,7 +9,7 @@ The roadmap favors a trustworthy small release before adding many features.
 - [x] Local privacy and request-security documentation
 - [x] Model-free API tests and CI
 - [ ] Fresh-clone test on a second Apple Silicon Mac
-- [ ] Enable GitHub private vulnerability reporting
+- [x] Enable GitHub private vulnerability reporting
 - [x] Add one polished application screenshot and a short dictation demo
 
 ## v0.2 — dependable distribution
