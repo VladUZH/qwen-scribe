@@ -1,6 +1,10 @@
-# Qwen Scribe
+<p align="center">
+  <img src="assets/AppIcon-1024.png" width="118" alt="Qwen Scribe app icon">
+</p>
 
-**Private, local transcription and system-wide dictation for Apple Silicon.**
+<h1 align="center">Qwen Scribe</h1>
+
+<p align="center"><strong>Private, local transcription and system-wide dictation for Apple Silicon.</strong></p>
 
 Qwen Scribe transcribes audio and video with
 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) running through
@@ -11,6 +15,12 @@ transcript text stay on the Mac.
 > **Project status:** `v0.1-beta`. Core transcription, history, and dictation
 > work, but downloadable app builds are not yet Developer ID signed or
 > notarized. Feedback and careful testing are welcome.
+
+<p align="center">
+  <img src="docs/assets/hero.png" width="900" alt="Qwen Scribe interface showing local transcription options, a synthetic transcript, and saved transcript history">
+</p>
+
+<p align="center"><sub>The interface above uses synthetic demo text; no private recording or transcript is shown.</sub></p>
 
 ## Highlights
 
@@ -25,6 +35,10 @@ transcript text stay on the Mac.
 - A non-focus-stealing HUD for **Listening**, **Transcribing**, success, and
   failure states
 - Localhost-only API with Host and browser-origin checks
+
+<p align="center">
+  <img src="docs/assets/dictation-states.png" width="900" alt="Qwen Scribe dictation flow: Listening, Transcribing, then Text inserted">
+</p>
 
 ## Requirements
 
@@ -154,6 +168,9 @@ random temporary filename and removed when processing finishes.
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing changes. Please report
 vulnerabilities according to [SECURITY.md](SECURITY.md), not in a public issue.
 The planned release sequence is documented in [ROADMAP.md](ROADMAP.md).
+
+Project source and issue tracking live at
+[VladUZH/qwen-scribe](https://github.com/VladUZH/qwen-scribe).
 
 ## License and project identity
 

@@ -9,8 +9,10 @@ branch and the newest `0.1.x` beta release only.
 
 Do not open a public issue for a vulnerability that could expose local files,
 record audio unexpectedly, inject text, or execute code. Use **Report a
-vulnerability** on the repository's Security tab. The repository owner must
-enable GitHub private vulnerability reporting before the first public release.
+vulnerability** in the
+[repository's Security tab](https://github.com/VladUZH/qwen-scribe/security/advisories/new).
+The repository owner must enable GitHub private vulnerability reporting before
+the first public release.
 
 Include the affected version, macOS version, reproduction steps, impact, and
 any suggested mitigation. Maintainers should acknowledge a complete report

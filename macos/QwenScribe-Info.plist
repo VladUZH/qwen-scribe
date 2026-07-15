@@ -6,8 +6,10 @@
     <string>Qwen Scribe</string>
     <key>CFBundleExecutable</key>
     <string>QwenScribe</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
-    <string>local.qwen-scribe.launcher</string>
+    <string>io.github.vladuzh.qwenscribe</string>
     <key>CFBundleName</key>
     <string>Qwen Scribe</string>
     <key>CFBundlePackageType</key>

@@ -24,6 +24,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/static" "$STOP_APP/Conte
 
 cp "$ROOT/macos/launcher.sh" "$APP/Contents/Resources/launch-server.sh"
 cp "$ROOT/macos/QwenScribe-Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/assets/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/server.py" "$ROOT/requirements.txt" "$ROOT/requirements-lock.txt" "$APP/Contents/Resources/"
 cp -R "$ROOT/static/." "$APP/Contents/Resources/static/"
 

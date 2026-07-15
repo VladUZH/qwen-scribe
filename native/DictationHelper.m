@@ -600,10 +600,30 @@ int main(int argc, const char *argv[]) {
             [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
             NSRect frame = NSMakeRect(0, 0, 196, 50);
             QSHUDView *view = [[QSHUDView alloc] initWithFrame:frame];
-            [view showState:QSHUDStateListening];
+            QSHUDState state = QSHUDStateListening;
+            if (argc > 3 && strcmp(argv[3], "transcribing") == 0) {
+                state = QSHUDStateTranscribing;
+            } else if (argc > 3 && strcmp(argv[3], "inserted") == 0) {
+                state = QSHUDStateInserted;
+            } else if (argc > 3 && strcmp(argv[3], "error") == 0) {
+                state = QSHUDStateError;
+            }
+            [view showState:state];
             [view stopAnimating];
             view.phase = 1.15;
-            NSBitmapImageRep *bitmap = [view bitmapImageRepForCachingDisplayInRect:frame];
+            NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc]
+                initWithBitmapDataPlanes:NULL
+                pixelsWide:392
+                pixelsHigh:100
+                bitsPerSample:8
+                samplesPerPixel:4
+                hasAlpha:YES
+                isPlanar:NO
+                colorSpaceName:NSCalibratedRGBColorSpace
+                bitmapFormat:0
+                bytesPerRow:0
+                bitsPerPixel:0];
+            bitmap.size = frame.size;
             [view cacheDisplayInRect:frame toBitmapImageRep:bitmap];
             NSData *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
             if (![png writeToFile:[NSString stringWithUTF8String:argv[2]] atomically:YES]) return 1;
