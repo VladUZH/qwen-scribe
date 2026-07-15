@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Qwen Scribe dictation states</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 1200px; height: 360px; margin: 0; overflow: hidden; }
+  body {
+    color: #f1eef8;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background:
+      radial-gradient(520px 260px at 15% 15%, rgba(201,54,111,.15), transparent 70%),
+      radial-gradient(460px 260px at 85% 92%, rgba(249,160,63,.10), transparent 72%),
+      #0f0e16;
+    padding: 42px 54px;
+  }
+  header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 42px; }
+  h1 { margin: 0; font-family: ui-serif, Georgia, serif; font-size: 31px; font-weight: 560; letter-spacing: -.01em; }
+  h1 em { font-style: normal; background: linear-gradient(90deg, #d43b76, #f9a03f); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header p { margin: 0; color: #89859e; font: 500 13px/1 ui-monospace, "SFMono-Regular", Menlo, monospace; }
+  .flow { display: grid; grid-template-columns: 1fr 48px 1fr 48px 1fr; align-items: center; }
+  .state { min-width: 0; }
+  .step { color: #77728c; font: 600 11px/1 ui-monospace, "SFMono-Regular", Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; margin: 0 0 13px 12px; }
+  .hud { width: 294px; height: 75px; display: block; object-fit: contain; object-position: left center; filter: drop-shadow(0 15px 18px rgba(0,0,0,.34)); }
+  .hint { color: #a9a4b9; font-size: 14px; margin: 12px 0 0 12px; }
+  .arrow { color: #4e485d; font-size: 30px; text-align: center; transform: translateY(-2px); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Hold. Speak. <em>Release.</em></h1>
+  <p>Right Command · any text field</p>
+</header>
+<main class="flow">
+  <section class="state">
+    <div class="step">01 · Hold</div>
+    <img class="hud" src="../docs/assets/hud-listening.png" alt="Listening dictation indicator">
+    <p class="hint">Speak while the key is held.</p>
+  </section>
+  <div class="arrow" aria-hidden="true">→</div>
+  <section class="state">
+    <div class="step">02 · Release</div>
+    <img class="hud" src="../docs/assets/hud-transcribing.png" alt="Transcribing dictation indicator">
+    <p class="hint">Speech is processed locally.</p>
+  </section>
+  <div class="arrow" aria-hidden="true">→</div>
+  <section class="state">
+    <div class="step">03 · Continue</div>
+    <img class="hud" src="../docs/assets/hud-inserted.png" alt="Text inserted dictation indicator">
+    <p class="hint">Text appears at the cursor.</p>
+  </section>
+</main>
+</body>
+</html>

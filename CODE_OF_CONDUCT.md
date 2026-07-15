@@ -13,7 +13,8 @@ that violate these expectations, and may temporarily or permanently restrict
 participation when necessary. Enforcement decisions should consider context,
 severity, prior behavior, and the safety of affected participants.
 
-Report conduct concerns privately to the repository maintainers through the
-contact method listed in the repository profile. Do not use a public issue when
-doing so could expose a participant. Maintainers will protect reporters' privacy
-as far as reasonably possible and will disclose conflicts of interest.
+Report conduct concerns privately to the repository maintainer through the
+contact method listed on the
+[VladUZH GitHub profile](https://github.com/VladUZH). Do not use a public issue
+when doing so could expose a participant. Maintainers will protect reporters'
+privacy as far as reasonably possible and will disclose conflicts of interest.

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Qwen Scribe social preview</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { width: 1280px; height: 640px; margin: 0; overflow: hidden; }
+  body {
+    color: #f4f1fa;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background:
+      radial-gradient(700px 480px at 17% 18%, rgba(201,54,111,.22), transparent 64%),
+      radial-gradient(680px 460px at 95% 100%, rgba(249,160,63,.14), transparent 65%),
+      linear-gradient(135deg, #0d0c14 0%, #13101d 52%, #0b0a11 100%);
+    position: relative;
+  }
+  body::before {
+    content: "";
+    position: absolute; inset: 0;
+    background-image: linear-gradient(rgba(255,255,255,.022) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.022) 1px, transparent 1px);
+    background-size: 40px 40px;
+    mask-image: linear-gradient(90deg, rgba(0,0,0,.6), transparent 75%);
+  }
+  main { height: 100%; display: flex; align-items: center; padding: 56px 74px; position: relative; z-index: 1; }
+  .icon { width: 390px; height: 390px; object-fit: contain; margin-right: 66px; filter: drop-shadow(0 28px 38px rgba(0,0,0,.42)); }
+  .copy { max-width: 650px; }
+  .eyebrow { color: #aaa4be; font: 600 18px/1.2 ui-monospace, "SFMono-Regular", Menlo, monospace; letter-spacing: .09em; text-transform: uppercase; margin-bottom: 22px; }
+  h1 { font-family: ui-serif, Georgia, serif; font-size: 80px; line-height: .98; letter-spacing: -.035em; margin: 0 0 24px; font-weight: 560; }
+  h1 em { font-style: normal; background: linear-gradient(90deg, #d43b76, #f9a03f); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  p { color: #c7c1d4; font-size: 26px; line-height: 1.35; margin: 0; max-width: 620px; }
+  .pills { display: flex; gap: 12px; margin-top: 34px; }
+  .pill { border: 1px solid #383348; background: rgba(28,25,40,.78); color: #dcd7e6; border-radius: 999px; padding: 10px 16px; font: 600 15px/1 ui-monospace, "SFMono-Regular", Menlo, monospace; }
+  .wave { position: absolute; right: 72px; bottom: 52px; display: flex; align-items: center; gap: 6px; height: 44px; opacity: .76; }
+  .wave i { display: block; width: 5px; border-radius: 999px; background: linear-gradient(#d43b76, #f9a03f); }
+  .wave i:nth-child(1), .wave i:nth-child(9) { height: 11px; }
+  .wave i:nth-child(2), .wave i:nth-child(8) { height: 20px; }
+  .wave i:nth-child(3), .wave i:nth-child(7) { height: 31px; }
+  .wave i:nth-child(4), .wave i:nth-child(6) { height: 42px; }
+  .wave i:nth-child(5) { height: 27px; }
+</style>
+</head>
+<body>
+<main>
+  <img class="icon" src="AppIcon.svg" alt="">
+  <section class="copy">
+    <div class="eyebrow">Open-source macOS speech tools</div>
+    <h1>Qwen <em>Scribe</em></h1>
+    <p>Private, local transcription and system-wide dictation for Apple Silicon.</p>
+    <div class="pills" aria-label="Project features">
+      <span class="pill">On-device</span>
+      <span class="pill">Qwen3-ASR</span>
+      <span class="pill">MLX + Metal</span>
+    </div>
+  </section>
+  <div class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+</main>
+</body>
+</html>

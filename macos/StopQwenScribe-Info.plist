@@ -7,7 +7,7 @@
     <key>CFBundleExecutable</key>
     <string>StopQwenScribe</string>
     <key>CFBundleIdentifier</key>
-    <string>local.qwen-scribe.stopper</string>
+    <string>io.github.vladuzh.qwenscribe.stopper</string>
     <key>CFBundleName</key>
     <string>Stop Qwen Scribe</string>
     <key>CFBundlePackageType</key>

@@ -10,7 +10,7 @@ The roadmap favors a trustworthy small release before adding many features.
 - [x] Model-free API tests and CI
 - [ ] Fresh-clone test on a second Apple Silicon Mac
 - [ ] Enable GitHub private vulnerability reporting
-- [ ] Add one polished application screenshot and a short dictation demo
+- [x] Add one polished application screenshot and a short dictation demo
 
 ## v0.2 — dependable distribution
 
