@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python and repository checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-test.txt
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-test.txt
+      - name: Run tests
+        env:
+          QWEN_SCRIBE_DATA_DIR: ${{ runner.temp }}/qwen-scribe-test-data
+          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/qwen-scribe-pycache
+        run: python -m unittest discover -s tests -v
+      - name: Check publishable source
+        run: python scripts/check_repo.py
+      - name: Compile Python sources
+        env:
+          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/qwen-scribe-pycache
+        run: python -m compileall -q server.py quantize_8bit.py compare_models.py tests
+
+  macos-app:
+    name: Build macOS arm64 apps
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build app bundles
+        run: make app
+      - name: Verify bundles
+        run: |
+          plutil -lint "dist/Qwen Scribe.app/Contents/Info.plist"
+          plutil -lint "dist/Stop Qwen Scribe.app/Contents/Info.plist"
+          file "dist/Qwen Scribe.app/Contents/MacOS/QwenScribeDictation" | grep arm64
+          codesign --verify --deep --strict "dist/Qwen Scribe.app"
+          codesign --verify --strict "dist/Stop Qwen Scribe.app"

@@ -1,0 +1,7 @@
+# Lightweight dependencies for API/unit tests on non-Apple CI runners.
+# MLX is imported lazily by server.py, so model weights and GPU packages are
+# not required to test the local API and transcript history.
+fastapi==0.139.0
+httpx2==2.5.0
+uvicorn==0.50.2
+python-multipart==0.0.32

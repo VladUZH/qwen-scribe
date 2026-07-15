@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>Qwen Scribe</string>
+    <key>CFBundleExecutable</key>
+    <string>QwenScribe</string>
+    <key>CFBundleIdentifier</key>
+    <string>local.qwen-scribe.launcher</string>
+    <key>CFBundleName</key>
+    <string>Qwen Scribe</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 Qwen Scribe contributors</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Qwen Scribe records audio while you hold the right Command key so it can transcribe and paste your dictation.</string>
+</dict>
+</plist>
