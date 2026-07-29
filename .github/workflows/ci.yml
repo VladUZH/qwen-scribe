@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           # The lowest version requirements-lock.txt can resolve on: numpy
           # 2.5.1 requires >= 3.12. Keep in sync with scripts/setup_python.sh.
@@ -46,7 +46,7 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Resolve the shipped dependency lock
