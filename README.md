@@ -55,7 +55,8 @@ transcript text stay on the Mac.
 - Apple Silicon Mac
 - macOS 14 or newer, as required by current
   [MLX releases](https://ml-explore.github.io/mlx/build/html/install.html)
-- Native Python 3.10 or newer
+- Native Python 3.12 or newer, as required by the pinned NumPy in
+  [requirements-lock.txt](requirements-lock.txt)
 - `ffmpeg` for non-WAV audio and video: `brew install ffmpeg`
 - Apple Command Line Tools to build the app from source:
   `xcode-select --install`
@@ -111,8 +112,10 @@ granted.
 
 The helper watches modifier-change events and reacts only to the right Command
 key. It snapshots the pasteboard in memory, pastes the transcription, and
-restores the previous pasteboard if it has not changed. See [PRIVACY.md](PRIVACY.md)
-for the complete data and permission behavior.
+restores the previous pasteboard if it has not changed. Without Accessibility
+access it cannot insert text at all, so it leaves the transcript on the
+clipboard and reports the failure instead of claiming success. See
+[PRIVACY.md](PRIVACY.md) for the complete data and permission behavior.
 
 ## Local files and deletion
 
@@ -126,6 +129,21 @@ for the complete data and permission behavior.
 Saved transcripts are readable, unencrypted JSON. Use the history controls to
 delete one or all. Normal filesystem deletion is not secure erasure, and local
 backups may retain copies.
+
+### Environment variables
+
+These are read by `server.py`, so they apply to `./run.sh` and to the server the
+Mac app starts:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `QWEN_SCRIBE_DATA_DIR` | `~/Library/Application Support/Qwen Scribe` | Where transcript history is stored |
+| `QWEN_SCRIBE_MODEL_DIR` | `./models` | Where a locally quantized model is looked up |
+| `QWEN_SCRIBE_PORT` | `8990` | Port for the local server |
+
+`QWEN_SCRIBE_PORT` only applies when you start the server yourself with
+`./run.sh`. The Mac app and the desktop dictation helper both address
+`127.0.0.1:8990` directly, so dictation will not find a server on another port.
 
 ## Development
 

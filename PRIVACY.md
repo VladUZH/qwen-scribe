@@ -8,7 +8,9 @@ key.
 ## Data stored on the Mac
 
 - Completed transcripts are automatically stored as readable, unencrypted JSON
-  in `~/Library/Application Support/Qwen Scribe/transcripts`.
+  in `~/Library/Application Support/Qwen Scribe/transcripts`. That is the
+  default location; `QWEN_SCRIBE_DATA_DIR` overrides it, so check that variable
+  before assuming where transcripts are on a given install.
 - The app's Python runtime lives in
   `~/Library/Application Support/Qwen Scribe/runtime`.
 - Diagnostic output is written to `~/Library/Logs/QwenScribe.log` and may
@@ -52,6 +54,12 @@ To paste without permanently replacing the clipboard, the helper temporarily
 copies the current pasteboard items into process memory, inserts the transcript,
 then restores the prior items if no other app changed the clipboard meanwhile.
 The snapshot is not written to disk or sent over the network.
+
+When Accessibility access is missing, or the app that was focused has quit, the
+helper cannot insert text. It then leaves the transcript on the clipboard and
+shows the failure HUD rather than reporting a successful insertion, so the
+clipboard does keep the transcript in that case until something else replaces
+it.
 
 ## Local API protection
 
