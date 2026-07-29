@@ -27,7 +27,7 @@ export DO_NOT_TRACK=1
 ./scripts/setup_python.sh
 
 echo
-echo "Starting Qwen Scribe on http://127.0.0.1:8990"
+echo "Starting Qwen Scribe on http://127.0.0.1:${QWEN_SCRIBE_PORT:-8990}"
 echo "The first transcription downloads the selected model once."
 echo
 exec .venv/bin/python server.py

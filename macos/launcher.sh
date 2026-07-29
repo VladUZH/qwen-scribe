@@ -72,7 +72,7 @@ find_python() {
   local candidate
   for candidate in "${candidates[@]}"; do
     [ -n "$candidate" ] && [ -x "$candidate" ] || continue
-    if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+    if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
       echo "$candidate"
       return 0
     fi
@@ -105,7 +105,7 @@ if [ -f "$VENV_DIR/pyvenv.cfg" ]; then
   VENV_MINOR="${VENV_REST%%.*}"
   if [ -n "$VENV_VERSION" ] && {
     [ "${VENV_MAJOR:-0}" -lt 3 ] ||
-    { [ "${VENV_MAJOR:-0}" -eq 3 ] && [ "${VENV_MINOR:-0}" -lt 10 ]; }
+    { [ "${VENV_MAJOR:-0}" -eq 3 ] && [ "${VENV_MINOR:-0}" -lt 12 ]; }
   }; then
     OLD_VENV="$RUNTIME_DIR/.venv-python-${VENV_VERSION}-$(date +%Y%m%d-%H%M%S)"
     echo "Replacing incompatible Python $VENV_VERSION environment (saved as $OLD_VENV)." >> "$LOG"
@@ -127,10 +127,10 @@ if [ ! -x "$VENV_DIR/bin/python" ]; then
   fi
   if [ "$created" = "0" ] && command -v uv >/dev/null 2>&1; then
     echo "venv failed or no Python was found; trying uv." >> "$LOG"
-    if uv venv "$VENV_DIR" --python '>=3.10' >> "$LOG" 2>&1; then created=1; fi
+    if uv venv "$VENV_DIR" --python '>=3.12' >> "$LOG" 2>&1; then created=1; fi
   fi
   if [ "$created" = "0" ]; then
-    fail_with_log "Failed to create the Python environment. Install Python 3.10 or newer and try again."
+    fail_with_log "Failed to create the Python environment. Install Python 3.12 or newer and try again."
   fi
 fi
 

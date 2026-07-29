@@ -20,11 +20,15 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
+          # The lowest version requirements-lock.txt can resolve on: numpy
+          # 2.5.1 requires >= 3.12. Keep in sync with scripts/setup_python.sh.
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-test.txt
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-test.txt
+      - name: Check shell scripts
+        run: bash -n run.sh scripts/*.sh macos/*.sh
       - name: Run tests
         env:
           QWEN_SCRIBE_DATA_DIR: ${{ runner.temp }}/qwen-scribe-test-data
@@ -42,6 +46,13 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Resolve the shipped dependency lock
+        # The set users actually install. Nothing else in CI proves it can
+        # still be resolved on the minimum supported interpreter.
+        run: python -m pip install --dry-run --ignore-installed -r requirements-lock.txt
       - name: Build app bundles
         run: make app
       - name: Verify bundles

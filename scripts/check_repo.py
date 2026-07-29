@@ -64,9 +64,16 @@ def main() -> int:
         ROOT / "scripts" / "setup_python.sh",
         ROOT / "scripts" / "build_macos_apps.sh",
         ROOT / "scripts" / "package_release.sh",
+        ROOT / "macos" / "launcher.sh",
+        ROOT / "macos" / "stop.sh",
     ):
         if not os.access(script, os.X_OK):
             errors.append(f"script is not executable: {script.relative_to(ROOT)}")
+
+    # The UI reads the supported formats from /api/config; a hardcoded list
+    # here would silently drift from ALLOWED_SUFFIXES again.
+    if 'id="formats"' not in html or "cfg.extensions" not in html:
+        errors.append("web UI no longer takes its format list from /api/config")
 
     if errors:
         print("Repository checks failed:", file=sys.stderr)
