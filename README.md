@@ -6,15 +6,25 @@
 
 <p align="center"><strong>Private, local transcription and system-wide dictation for Apple Silicon.</strong></p>
 
+<p align="center">
+  <a href="https://github.com/VladUZH/qwen-scribe/actions/workflows/ci.yml"><img src="https://github.com/VladUZH/qwen-scribe/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
+  <a href="https://github.com/VladUZH/qwen-scribe/releases"><img src="https://img.shields.io/github/v/release/VladUZH/qwen-scribe?include_prereleases&amp;sort=semver&amp;label=release" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0 license"></a>
+  <img src="https://img.shields.io/badge/platform-macOS%2014%2B%20%7C%20Apple%20Silicon-lightgrey" alt="macOS 14 or newer on Apple Silicon">
+  <img src="https://img.shields.io/badge/data-100%25%20on--device-brightgreen" alt="All processing happens on-device">
+</p>
+
 Qwen Scribe transcribes audio and video with
 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) running through
 [mlx-qwen3-asr](https://github.com/moona3k/mlx-qwen3-asr) on the Mac's Metal
 GPU. There is no account, API key, or Qwen Scribe cloud service. Audio and
 transcript text stay on the Mac.
 
-> **Project status:** `v0.1-beta`. Core transcription, history, and dictation
-> work, but downloadable app builds are not yet Developer ID signed or
-> notarized. Feedback and careful testing are welcome.
+> **Project status:** `v0.1.0-beta.1`. Core transcription, history, and
+> dictation work. Releases are source-only for now: app builds are not yet
+> Developer ID signed or notarized, so you build locally with `make app`.
+> Signed and notarized binaries are planned for v0.2, see [ROADMAP.md](ROADMAP.md).
+> Feedback and careful testing are welcome.
 
 <p align="center">
   <img src="docs/assets/hero.png" width="900" alt="Qwen Scribe interface showing local transcription options, a synthetic transcript, and saved transcript history">
