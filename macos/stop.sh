@@ -21,6 +21,19 @@ stop_known_process() {
     *"/Qwen Scribe.app/Contents/MacOS/QwenScribe"*|\
     *QwenScribeDictation*)
       kill "$pid" >/dev/null 2>&1 || true
+      # A wedged MLX decode ignores SIGTERM until the current chunk finishes,
+      # so confirm the exit instead of assuming it.
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$pid" >/dev/null 2>&1 || break
+        sleep 1
+      done
+      if kill -0 "$pid" >/dev/null 2>&1; then
+        kill -9 "$pid" >/dev/null 2>&1 || true
+        sleep 1
+      fi
+      if kill -0 "$pid" >/dev/null 2>&1; then
+        return 2   # still alive: keep the pidfile so a retry can find it
+      fi
       rm -f "$pidfile"
       return 0
       ;;
@@ -32,10 +45,18 @@ stop_known_process() {
 }
 
 stopped=0
-if stop_known_process "$PIDFILE"; then stopped=1; fi
-if stop_known_process "$DICTATION_PIDFILE"; then stopped=1; fi
+stubborn=0
+for pidfile in "$PIDFILE" "$DICTATION_PIDFILE"; do
+  stop_known_process "$pidfile"
+  case "$?" in
+    0) stopped=1 ;;
+    2) stubborn=1 ;;
+  esac
+done
 
-if [ "$stopped" = "1" ]; then
+if [ "$stubborn" = "1" ]; then
+  notify "Qwen Scribe would not stop. Quit it from Activity Monitor."
+elif [ "$stopped" = "1" ]; then
   notify "Server stopped."
 else
   notify "Server was not running."
