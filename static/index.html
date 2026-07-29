@@ -99,7 +99,7 @@
   .field-wide { grid-column: 1 / -1; }
   .check { display: flex; align-items: center; gap: 8px; padding-top: 26px; }
   .check input { accent-color: var(--amber); width: 16px; height: 16px; }
-  .check span { font-size: 13.5px; }
+  .check label { font-size: 13.5px; cursor: pointer; }
 
   /* Desktop dictation */
   .dictation {
@@ -237,7 +237,7 @@
   <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload audio or video file">
     <h2>Drop audio or video here</h2>
     <p>or click to choose a file — everything runs locally on this Mac</p>
-    <div class="formats">wav · mp3 · m4a · flac · ogg · qta · mp4 · mov · mkv · webm</div>
+    <div class="formats" id="formats">wav · mp3 · m4a · flac · ogg · qta · mp4 · mov · mkv · webm</div>
   </div>
   <input type="file" id="file" accept="audio/*,video/*,.mkv,.opus,.qta">
 
@@ -255,11 +255,11 @@
     </div>
     <div class="check">
       <input type="checkbox" id="timestamps">
-      <span>Word timestamps (enables .srt)</span>
+      <label for="timestamps">Word timestamps (enables .srt)</label>
     </div>
     <div class="check" id="turboWrap">
       <input type="checkbox" id="turbo">
-      <span>Turbo — speculative decoding (0.6B drafts, 1.7B verifies; same quality, uses more GPU)</span>
+      <label for="turbo">Turbo — speculative decoding (0.6B drafts, 1.7B verifies; same quality, uses more GPU)</label>
     </div>
     <div class="field field-wide">
       <label for="context">Domain vocabulary <span style="text-transform:none;font-weight:400">(optional — space-separated terms, e.g. "EBITDA RepRisk ESG")</span></label>
@@ -354,6 +354,16 @@
   let lastResult = null;
   let baseName = "transcript";
   let activeTranscriptId = null;
+  // Bumped on every submission so a slow upload cannot resurrect itself over
+  // a newer one and leave an orphaned polling interval behind.
+  let submissionSeq = 0;
+  let pollFailures = 0;
+  let allowedExtensions = null;
+
+  const stopPolling = () => {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+  };
 
   fetch("/api/config").then(r => r.json()).then(cfg => {
     const sel = $("language");
@@ -365,6 +375,13 @@
     });
     sel.value = cfg.languages.includes("English") ? "English" : "auto";
     $("model").value = cfg.default_model;
+    // The server owns the supported-format list; mirror it so the caption,
+    // the picker filter, and the upload check can never drift apart.
+    if (Array.isArray(cfg.extensions) && cfg.extensions.length) {
+      allowedExtensions = new Set(cfg.extensions.map(e => e.toLowerCase()));
+      $("formats").textContent = cfg.extensions.map(e => e.replace(/^\./, "")).join(" · ");
+      $("file").accept = cfg.extensions.join(",");
+    }
     if (cfg.quantized) {
       $("runtime").textContent = "Qwen3-ASR · MLX · Metal · 8-bit";
       $("model").options[0].textContent = "1.7B — accuracy (8-bit)";
@@ -381,10 +398,19 @@
   ["dragover","dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("dragover"); }));
   ["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("dragover"); }));
   drop.addEventListener("drop", e => { if (e.dataTransfer.files[0]) submit(e.dataTransfer.files[0]); });
-  $("file").addEventListener("change", e => { if (e.target.files[0]) submit(e.target.files[0]); });
+  // Clearing the input is what makes re-picking the same file fire "change"
+  // again; read the file out first, because blanking it empties .files.
+  $("file").addEventListener("change", e => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (file) submit(file);
+  });
 
   async function submit(file) {
+    const seq = ++submissionSeq;
+    const extension = (file.name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
     currentFile = file;
+    lastResult = null;
     baseName = file.name.replace(/\.[^.]+$/, "") || "transcript";
     $("job").classList.add("visible");
     $("transcript").classList.remove("visible");
@@ -394,7 +420,12 @@
     $("jobDetail").textContent = "";
     $("jobError").textContent = "";
     paintProgress(0, false);
-    if (pollTimer) clearInterval(pollTimer);
+    stopPolling();
+    pollFailures = 0;
+
+    if (allowedExtensions && !allowedExtensions.has(extension)) {
+      return fail(`Unsupported file type “${extension || file.name}”. Supported: ${[...allowedExtensions].join(" ")}`);
+    }
 
     const form = new FormData();
     form.append("file", file);
@@ -408,21 +439,45 @@
     try {
       res = await fetch("/api/jobs", { method: "POST", body: form });
     } catch {
-      return fail("Server unreachable. Is server.py still running?");
+      if (seq === submissionSeq) fail("Server unreachable. Is server.py still running?");
+      return;
     }
+    if (seq !== submissionSeq) return;   // a newer upload already took over
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       return fail(body.detail || `Upload failed (${res.status})`);
     }
     const { id } = await res.json();
-    pollTimer = setInterval(() => poll(id), 800);
+    if (seq !== submissionSeq) return;
+    pollTimer = setInterval(() => poll(id, seq), 800);
   }
 
-  async function poll(id) {
-    let job;
+  // Give up rather than hammer a server that is gone, but tolerate the brief
+  // gap while it is still loading a model.
+  function pollFailed() {
+    if (++pollFailures >= 5) {
+      stopPolling();
+      fail("Lost contact with the server. Is server.py still running?");
+    }
+  }
+
+  async function poll(id, seq) {
+    if (seq !== submissionSeq) return;
+    let res;
     try {
-      job = await (await fetch(`/api/jobs/${id}`)).json();
-    } catch { return; }
+      res = await fetch(`/api/jobs/${id}`);
+    } catch {
+      return pollFailed();
+    }
+    if (seq !== submissionSeq) return;
+    if (res.status === 404) {
+      stopPolling();
+      return fail("The server no longer knows about this job — it was probably restarted. Please upload again.");
+    }
+    if (!res.ok) return pollFailed();
+    const job = await res.json().catch(() => null);
+    if (!job || typeof job.status !== "string") return pollFailed();
+    pollFailures = 0;
 
     $("jobStatus").textContent = job.status;
     $("jobDetail").textContent = job.detail || "";
@@ -437,7 +492,7 @@
       }
     }
     if (job.status === "done") {
-      clearInterval(pollTimer);
+      stopPolling();
       paintProgress(1, false);
       $("jobStatus").classList.add("done");
       const secs = job.finished_at && job.started_at ? (job.finished_at - job.started_at).toFixed(1) : null;
@@ -452,17 +507,35 @@
       if (job.history_saved) loadHistory();
     }
     if (job.status === "error") {
-      clearInterval(pollTimer);
+      stopPolling();
       fail(job.detail || "Transcription failed");
+      return;
+    }
+    if (!["queued", "loading", "processing", "done"].includes(job.status)) {
+      stopPolling();
+      fail("The server reported an unexpected job state.");
     }
   }
 
   function fail(msg) {
-    if (pollTimer) clearInterval(pollTimer);
+    stopPolling();
     $("jobStatus").textContent = "error";
     $("jobStatus").className = "job-status error";
     $("jobError").textContent = msg;
     paintProgress(0, false);
+    // A job that failed part-way still produced usable text. Keep it, but
+    // relabel it so it can never be mistaken for a finished transcript.
+    const partial = $("transcript").classList.contains("visible") ? $("tBody").textContent : "";
+    if (partial) {
+      lastResult = { text: partial, segments: null, language: null };
+      $("tMeta").textContent = "partial transcript — the job failed before finishing";
+      $("btnCopy").hidden = false;
+      $("btnTxt").hidden = false;
+      $("btnSrt").hidden = true;
+      $("tNote").textContent = "Partial result — not saved to transcript history.";
+    } else {
+      $("transcript").classList.remove("visible");
+    }
   }
 
   $("model").addEventListener("change", () => {
@@ -516,17 +589,26 @@
 
   // Build SRT cues from word-level segments: break on long pauses,
   // ~42 chars, or 6 s per cue.
+  // Scripts written without spaces get one segment per character, so joining
+  // with spaces would put a gap between every character.
+  const CJK_LANGUAGES = new Set([
+    "chinese", "zh", "zh-cn", "zh-tw", "cantonese", "yue",
+    "japanese", "ja", "jp", "korean", "ko", "kr", "thai", "th",
+  ]);
+
   $("btnSrt").addEventListener("click", () => {
     const words = lastResult?.segments || [];
+    const unspaced = CJK_LANGUAGES.has(String(lastResult?.language || "").toLowerCase());
+    const maxChars = unspaced ? 20 : 42;
     const cues = [];
     let cue = null;
     for (const w of words) {
       const startNew = !cue
         || (w.start - cue.end) > 0.9
-        || (cue.text.length + w.text.length) > 42
+        || (cue.text.length + w.text.length) > maxChars
         || (w.end - cue.start) > 6;
       if (startNew) { if (cue) cues.push(cue); cue = { start: w.start, end: w.end, text: w.text }; }
-      else { cue.end = w.end; cue.text += (w.text.startsWith("'") ? "" : " ") + w.text; }
+      else { cue.end = w.end; cue.text += (unspaced || w.text.startsWith("'") ? "" : " ") + w.text; }
     }
     if (cue) cues.push(cue);
     const ts = s => {
