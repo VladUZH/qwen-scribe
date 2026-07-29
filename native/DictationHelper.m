@@ -8,6 +8,17 @@ static NSString *const QSServerBase = @"http://127.0.0.1:8990";
 static const CGKeyCode QSRightCommandKeyCode = 54;
 static const CGKeyCode QSPasteKeyCode = 9;
 
+// NX_DEVICERCMDKEYMASK from <IOKit/hidsystem/IOLLEvent.h>. The device
+// independent NSEventModifierFlagCommand stays set while the LEFT Command key
+// is held, so using it would swallow the right-Command key-up and leave the
+// microphone recording. The low 16 bits of modifierFlags carry the
+// device-dependent bits that say which physical key it was.
+static const NSEventModifierFlags QSRightCommandMask = 0x000010;
+
+// A held key that is never released (a lost key-up, a Space switch) must not
+// leave dictation recording forever.
+static const NSTimeInterval QSMaximumRecordingSeconds = 120.0;
+
 static void QSAppendString(NSMutableData *data, NSString *string) {
     [data appendData:[string dataUsingEncoding:NSUTF8StringEncoding]];
 }
@@ -207,6 +218,8 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 @property (nonatomic, strong) id globalMonitor;
 @property (nonatomic, strong) id localMonitor;
 @property (nonatomic, strong) NSTimer *heartbeatTimer;
+@property (nonatomic, strong) NSTimer *recordingWatchdog;
+@property (nonatomic, strong) dispatch_source_t terminationSource;
 @property (nonatomic, strong) AVAudioRecorder *recorder;
 @property (nonatomic, strong) NSURL *recordingURL;
 @property (nonatomic, strong) NSDate *recordingStartedAt;
@@ -267,6 +280,8 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
     self.hud = [[QSDictationHUD alloc] init];
     [self writeProcessIdentity];
+    [self installTerminationHandler];
+    [self sweepStrandedRecordings];
 
     NSDictionary *accessibilityOptions = @{
         (__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES
@@ -299,15 +314,52 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    [self tearDown];
+}
+
+/// Shared cleanup. Runs for a normal quit and for the SIGTERM that
+/// "Stop Qwen Scribe" sends, which never reaches applicationWillTerminate:.
+- (void)tearDown {
     [self.recorder stop];
+    self.recorder = nil;
     [self.hud hide];
     if (self.globalMonitor) [NSEvent removeMonitor:self.globalMonitor];
     if (self.localMonitor) [NSEvent removeMonitor:self.localMonitor];
+    self.globalMonitor = nil;
+    self.localMonitor = nil;
     [self.heartbeatTimer invalidate];
+    [self.recordingWatchdog invalidate];
     if (self.recordingURL) {
         [[NSFileManager defaultManager] removeItemAtURL:self.recordingURL error:nil];
+        self.recordingURL = nil;
     }
     [self removeProcessIdentity];
+}
+
+- (void)installTerminationHandler {
+    // The default SIGTERM disposition would kill us before any cleanup runs,
+    // leaving raw dictation audio in the temp directory.
+    signal(SIGTERM, SIG_IGN);
+    __weak typeof(self) weakSelf = self;
+    self.terminationSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0,
+                                                    dispatch_get_main_queue());
+    dispatch_source_set_event_handler(self.terminationSource, ^{
+        [weakSelf tearDown];
+        exit(0);
+    });
+    dispatch_resume(self.terminationSource);
+}
+
+/// Remove dictation WAVs stranded by an earlier hard kill.
+- (void)sweepStrandedRecordings {
+    NSString *temporaryDirectory = NSTemporaryDirectory();
+    NSArray<NSString *> *names = [NSFileManager.defaultManager
+        contentsOfDirectoryAtPath:temporaryDirectory error:nil];
+    for (NSString *name in names) {
+        if (![name hasPrefix:@"qwen-scribe-dictation-"]) continue;
+        [NSFileManager.defaultManager
+            removeItemAtPath:[temporaryDirectory stringByAppendingPathComponent:name] error:nil];
+    }
 }
 
 - (void)requestMicrophoneAccess {
@@ -322,7 +374,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 
 - (void)handleFlagsChanged:(NSEvent *)event {
     if (event.keyCode != QSRightCommandKeyCode) return;
-    BOOL isDown = (event.modifierFlags & NSEventModifierFlagCommand) != 0;
+    BOOL isDown = (event.modifierFlags & QSRightCommandMask) != 0;
     if (isDown == self.rightCommandIsDown) return;
     self.rightCommandIsDown = isDown;
     if (isDown) [self beginRecording];
@@ -353,6 +405,9 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 
     NSError *error = nil;
     AVAudioRecorder *recorder = [[AVAudioRecorder alloc] initWithURL:url settings:settings error:&error];
+    // prepareToRecord already creates the file, so record it before the
+    // failure check or the shared cleanup path will not know to delete it.
+    self.recordingURL = url;
     [recorder prepareToRecord];
     if (error || ![recorder record]) {
         [self reportFailure:[NSString stringWithFormat:@"Could not start recording: %@", error.localizedDescription ?: @"unknown error"]];
@@ -360,15 +415,28 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     }
 
     self.recorder = recorder;
-    self.recordingURL = url;
     self.recordingStartedAt = [NSDate date];
     self.targetApplication = NSWorkspace.sharedWorkspace.frontmostApplication;
     self.busy = YES;
     [self.hud showState:QSHUDStateListening];
     [self playSound:@"Tink"];
+
+    // If the key-up never arrives, stop on our own rather than record forever.
+    [self.recordingWatchdog invalidate];
+    __weak typeof(self) weakSelf = self;
+    self.recordingWatchdog = [NSTimer scheduledTimerWithTimeInterval:QSMaximumRecordingSeconds
+                                                             repeats:NO
+                                                               block:^(NSTimer *timer) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf.recorder) return;
+        strongSelf.rightCommandIsDown = NO;
+        [strongSelf finishRecording];
+    }];
 }
 
 - (void)finishRecording {
+    [self.recordingWatchdog invalidate];
+    self.recordingWatchdog = nil;
     if (!self.recorder || !self.recordingURL) return;
     [self.recorder stop];
     self.recorder = nil;
@@ -447,14 +515,23 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     __weak typeof(self) weakSelf = self;
     [[NSURLSession.sharedSession dataTaskWithURL:url
                               completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        NSDictionary *state = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
+        id payload = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSDictionary *state = [payload isKindOfClass:NSDictionary.class] ? payload : nil;
         if (error || !state) {
             [weakSelf reportFailure:@"Lost connection to Qwen Scribe"];
             return;
         }
+        // A restarted server has forgotten the job; without this the helper
+        // would treat the 404 body as "still running" and hang for 10 minutes.
+        if (http.statusCode < 200 || http.statusCode >= 300) {
+            [weakSelf reportFailure:state[@"detail"] ?: @"Qwen Scribe lost track of this dictation"];
+            return;
+        }
         NSString *status = state[@"status"];
         if ([status isEqualToString:@"done"]) {
-            NSString *text = state[@"result"][@"text"];
+            NSDictionary *result = [state[@"result"] isKindOfClass:NSDictionary.class] ? state[@"result"] : nil;
+            NSString *text = [result[@"text"] isKindOfClass:NSString.class] ? result[@"text"] : nil;
             text = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
             if (text.length == 0) {
                 [weakSelf reportFailure:@"No speech detected"];
@@ -472,8 +549,39 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     }] resume];
 }
 
+/// Leave the transcript on the clipboard and tell the user why it was not typed.
+- (void)deliverToClipboardOnly:(NSString *)text reason:(NSString *)reason {
+    NSPasteboard *pasteboard = NSPasteboard.generalPasteboard;
+    [pasteboard clearContents];
+    [pasteboard setString:text forType:NSPasteboardTypeString];
+    fprintf(stderr, "Qwen Scribe dictation: %s — transcript copied to the clipboard instead\n",
+            reason.UTF8String);
+    [self playSound:@"Basso"];
+    [self.hud showState:QSHUDStateError];
+    if (self.recordingURL) {
+        [[NSFileManager defaultManager] removeItemAtURL:self.recordingURL error:nil];
+    }
+    self.recordingURL = nil;
+    self.targetApplication = nil;
+    self.busy = NO;
+}
+
 - (void)pasteText:(NSString *)text {
-    [self.targetApplication activateWithOptions:0];
+    // Without Accessibility the synthetic Command-V is silently discarded, so
+    // reporting "Text inserted" would be a lie and the transcript would be
+    // lost when the pasteboard is restored a moment later.
+    if (!AXIsProcessTrusted()) {
+        NSDictionary *options = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
+        AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+        [self deliverToClipboardOnly:text reason:@"Accessibility access is not granted"];
+        return;
+    }
+    if (!self.targetApplication || self.targetApplication.isTerminated) {
+        [self deliverToClipboardOnly:text reason:@"the target application is gone"];
+        return;
+    }
+
+    [self.targetApplication activateWithOptions:NSApplicationActivateAllWindows];
     __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
@@ -483,25 +591,21 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
         [pasteboard setString:text forType:NSPasteboardTypeString];
         NSInteger injectedChangeCount = pasteboard.changeCount;
 
-        CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStateHIDSystemState);
-        CGEventRef keyDown = CGEventCreateKeyboardEvent(source, QSPasteKeyCode, true);
-        CGEventRef keyUp = CGEventCreateKeyboardEvent(source, QSPasteKeyCode, false);
-        CGEventSetFlags(keyDown, kCGEventFlagMaskCommand);
-        CGEventSetFlags(keyUp, kCGEventFlagMaskCommand);
-        CGEventPost(kCGHIDEventTap, keyDown);
-        CGEventPost(kCGHIDEventTap, keyUp);
-        CFRelease(keyDown);
-        CFRelease(keyUp);
-        CFRelease(source);
+        [weakSelf postPasteShortcutWithAttempt:0];
         [weakSelf playSound:@"Glass"];
         [weakSelf.hud showState:QSHUDStateInserted];
 
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.7 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            if (pasteboard.changeCount == injectedChangeCount) {
-                [weakSelf restorePasteboard:snapshot to:pasteboard];
-            }
-        });
+        // Restoring too early pastes the user's *old* clipboard into a slow
+        // app. An empty snapshot is never restored, so the transcript stays
+        // recoverable if the paste did not land after all.
+        if (snapshot.count) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                if (pasteboard.changeCount == injectedChangeCount) {
+                    [weakSelf restorePasteboard:snapshot to:pasteboard];
+                }
+            });
+        }
         if (weakSelf.recordingURL) {
             [[NSFileManager defaultManager] removeItemAtURL:weakSelf.recordingURL error:nil];
         }
@@ -509,6 +613,33 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
         weakSelf.targetApplication = nil;
         weakSelf.busy = NO;
     });
+}
+
+/// Post Command-V, waiting briefly for any other physically held modifier to
+/// clear — the window server ORs hardware modifiers into synthetic events, so
+/// a held Shift or Option would turn the paste into a different shortcut.
+- (void)postPasteShortcutWithAttempt:(NSInteger)attempt {
+    const CGEventFlags blocking = kCGEventFlagMaskShift | kCGEventFlagMaskControl |
+                                  kCGEventFlagMaskAlternate | kCGEventFlagMaskSecondaryFn;
+    if ((CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState) & blocking) && attempt < 8) {
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [weakSelf postPasteShortcutWithAttempt:attempt + 1];
+        });
+        return;
+    }
+
+    CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStatePrivate);
+    CGEventRef keyDown = CGEventCreateKeyboardEvent(source, QSPasteKeyCode, true);
+    CGEventRef keyUp = CGEventCreateKeyboardEvent(source, QSPasteKeyCode, false);
+    CGEventSetFlags(keyDown, kCGEventFlagMaskCommand);
+    CGEventSetFlags(keyUp, kCGEventFlagMaskCommand);
+    CGEventPost(kCGHIDEventTap, keyDown);
+    CGEventPost(kCGHIDEventTap, keyUp);
+    CFRelease(keyDown);
+    CFRelease(keyUp);
+    if (source) CFRelease(source);
 }
 
 - (NSArray<NSDictionary<NSPasteboardType, NSData *> *> *)snapshotPasteboard:(NSPasteboard *)pasteboard {
@@ -563,6 +694,8 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
         if (weakSelf.recordingURL) {
             [[NSFileManager defaultManager] removeItemAtURL:weakSelf.recordingURL error:nil];
         }
+        [weakSelf.recordingWatchdog invalidate];
+        weakSelf.recordingWatchdog = nil;
         weakSelf.recordingURL = nil;
         weakSelf.recorder = nil;
         weakSelf.recordingStartedAt = nil;
