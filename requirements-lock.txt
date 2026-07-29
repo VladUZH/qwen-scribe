@@ -21,7 +21,7 @@ mlx-qwen3-asr==0.3.5
 numpy==2.5.1
 packaging==26.2
 pydantic==2.13.4
-pydantic_core==2.47.0
+pydantic_core==2.46.4
 python-multipart==0.0.32
 PyYAML==6.0.3
 regex==2026.7.19
