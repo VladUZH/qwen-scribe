@@ -17,6 +17,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -71,18 +72,27 @@ ALLOWED_SUFFIXES = {
 }
 
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB
+# Multipart boundaries and part headers add a little to the declared body size.
+MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+OVERSIZE_DETAIL = "File exceeds the 4 GB upload limit"
 
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "qwen-scribe-uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-# A hard crash can bypass a job's finally block. Remove only old files so a
-# second accidental server process cannot interfere with an active upload.
-for stale_upload in UPLOAD_DIR.iterdir():
-    try:
-        if stale_upload.is_file() and time.time() - stale_upload.stat().st_mtime > 24 * 60 * 60:
-            stale_upload.unlink()
-    except OSError:
-        pass
+# A hard crash can bypass a job's finally block, and can leave a half-written
+# transcript behind. Remove only old files so a second accidental server
+# process cannot interfere with an active upload.
+def _sweep_stale(paths, max_age_seconds: float = 24 * 60 * 60) -> None:
+    for stale in paths:
+        try:
+            if stale.is_file() and time.time() - stale.stat().st_mtime > max_age_seconds:
+                stale.unlink()
+        except OSError:
+            pass
+
+
+_sweep_stale(UPLOAD_DIR.iterdir())
+_sweep_stale(TRANSCRIPTS_DIR.glob("*.json.tmp"))
 
 # ---------------------------------------------------------------------------
 # Model sessions (lazy-loaded, cached, one at a time on the GPU)
@@ -124,6 +134,15 @@ dictation_lock = threading.Lock()
 # One worker: serialize GPU work so parallel uploads queue instead of thrash.
 executor = ThreadPoolExecutor(max_workers=1)
 
+# Set on shutdown so a running transcription unwinds at the next chunk
+# boundary instead of holding the process open for the rest of a long file.
+stopping = threading.Event()
+
+# Finished jobs are kept only long enough for the browser to collect the
+# result; the transcript itself lives in TRANSCRIPTS_DIR.
+JOB_RETENTION_SECONDS = 60 * 60
+MAX_REMEMBERED_JOBS = 50
+
 
 def _transcript_path(transcript_id: str) -> Path:
     """Return a safe transcript path, rejecting path traversal and bad IDs."""
@@ -149,30 +168,49 @@ def _save_transcript(job: dict, result: dict, finished_at: float) -> None:
     }
     path = _transcript_path(job["id"])
     temporary_path = path.with_suffix(".json.tmp")
-    temporary_path.write_text(
-        json.dumps(transcript, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    temporary_path.replace(path)
+    try:
+        # Flush to the platter before renaming: a rename of a still-buffered
+        # file can survive a power loss as a zero-length transcript.
+        with temporary_path.open("w", encoding="utf-8") as handle:
+            json.dump(transcript, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary_path.replace(path)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def _read_transcript(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _timestamp(value: object) -> float | None:
+    """Return value as a float only if it really is a number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
 def _transcript_summary(transcript: dict) -> dict:
-    result = transcript.get("result") or {}
-    text = result.get("text") or ""
+    # Hand-edited or truncated files reach this function too, so every field
+    # is treated as untrusted: one bad file must not break the whole history.
+    if not isinstance(transcript, dict):
+        raise ValueError("transcript file does not contain a JSON object")
+    result = transcript.get("result")
+    result = result if isinstance(result, dict) else {}
+    text = result.get("text")
+    text = text if isinstance(text, str) else ""
     normalized = " ".join(text.split())
-    started_at = transcript.get("started_at")
-    finished_at = transcript.get("finished_at")
+    started_at = _timestamp(transcript.get("started_at"))
+    finished_at = _timestamp(transcript.get("finished_at"))
     duration_seconds = None
-    if isinstance(started_at, (int, float)) and isinstance(finished_at, (int, float)):
-        duration_seconds = max(0, finished_at - started_at)
+    if started_at is not None and finished_at is not None:
+        duration_seconds = max(0.0, finished_at - started_at)
     return {
         "id": transcript.get("id"),
         "filename": transcript.get("filename") or "Untitled recording",
-        "created_at": transcript.get("created_at"),
+        "created_at": _timestamp(transcript.get("created_at")),
         "finished_at": finished_at,
         "duration_seconds": duration_seconds,
         "model": transcript.get("model"),
@@ -188,6 +226,34 @@ def _update(job_id: str, **fields) -> None:
     with jobs_lock:
         if job_id in jobs:
             jobs[job_id].update(fields)
+
+
+def _prune_jobs_locked() -> None:
+    """Drop old finished jobs. Caller must hold jobs_lock.
+
+    Completed transcripts are already on disk, so the in-memory record only
+    has to outlive the browser's polling loop. Running jobs are never evicted:
+    the UI would see a 404 mid-transcription.
+    """
+    now = time.time()
+    finished = [
+        (job.get("finished_at") or job.get("created_at") or 0.0, job_id)
+        for job_id, job in jobs.items()
+        if job.get("status") in {"done", "error"}
+    ]
+    evict = {job_id for stamp, job_id in finished if now - stamp > JOB_RETENTION_SECONDS}
+    surviving = sorted((item for item in finished if item[1] not in evict), reverse=True)
+    evict.update(job_id for _stamp, job_id in surviving[MAX_REMEMBERED_JOBS:])
+    for job_id in evict:
+        jobs.pop(job_id, None)
+
+
+def _forget_jobs(*job_ids: str) -> None:
+    """Drop finished jobs whose transcript the user just deleted."""
+    with jobs_lock:
+        for job_id in job_ids:
+            if jobs.get(job_id, {}).get("status") in {"done", "error"}:
+                del jobs[job_id]
 
 
 def _run_job(job_id: str) -> None:
@@ -238,6 +304,8 @@ def _run_job(job_id: str) -> None:
 
         # split_audio_into_chunks returns (waveform, offset_seconds) tuples.
         for i, (chunk_audio, chunk_offset) in enumerate(chunks):
+            if stopping.is_set():
+                raise RuntimeError("Server stopped before this job finished")
             result = session.transcribe(chunk_audio, **kwargs)
             if result.text:
                 texts.append(result.text.strip())
@@ -299,29 +367,24 @@ def _run_job(job_id: str) -> None:
 # API
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Qwen Scribe", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    stopping.clear()
+    yield
+    # Without this, Python's atexit handler joins the worker thread and
+    # silently runs every queued job to completion before the process exits.
+    stopping.set()
+    executor.shutdown(wait=False, cancel_futures=True)
+    with jobs_lock:
+        for job in jobs.values():
+            if job.get("status") in {"queued", "loading", "processing"}:
+                job.update(status="error", detail="Server stopped before this job finished")
 
 
-@app.middleware("http")
-async def local_requests_only(request: Request, call_next):
-    """Reject DNS rebinding and cross-site browser requests to the local API."""
-    allowed_hosts = {"127.0.0.1", "localhost", "::1", "testserver"}
-    if HOST not in {"0.0.0.0", "::"}:
-        allowed_hosts.add(HOST)
+app = FastAPI(title="Qwen Scribe", docs_url=None, redoc_url=None, lifespan=lifespan)
 
-    if (request.url.hostname or "").lower() not in allowed_hosts:
-        return JSONResponse({"detail": "Untrusted Host header"}, status_code=400)
 
-    origin = request.headers.get("origin")
-    if origin:
-        expected_origin = f"{request.url.scheme}://{request.headers.get('host', '')}"
-        if origin.rstrip("/") != expected_origin.rstrip("/"):
-            return JSONResponse(
-                {"detail": "Cross-origin requests are not allowed"},
-                status_code=403,
-            )
-
-    response = await call_next(request)
+def _with_security_headers(response: Response) -> Response:
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("X-Frame-Options", "DENY")
@@ -336,6 +399,42 @@ async def local_requests_only(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def local_requests_only(request: Request, call_next):
+    """Reject DNS rebinding and cross-site browser requests to the local API."""
+    allowed_hosts = {"127.0.0.1", "localhost", "::1"}
+    if HOST not in {"0.0.0.0", "::"}:
+        allowed_hosts.add(HOST)
+
+    if (request.url.hostname or "").lower() not in allowed_hosts:
+        return _with_security_headers(
+            JSONResponse({"detail": "Untrusted Host header"}, status_code=400)
+        )
+
+    origin = request.headers.get("origin")
+    if origin:
+        expected_origin = f"{request.url.scheme}://{request.headers.get('host', '')}"
+        if origin.rstrip("/") != expected_origin.rstrip("/"):
+            return _with_security_headers(
+                JSONResponse(
+                    {"detail": "Cross-origin requests are not allowed"},
+                    status_code=403,
+                )
+            )
+
+    # Refuse an oversized upload before Starlette spools the whole body to
+    # disk. The per-chunk counter in create_job stays as the real limit for
+    # requests that arrive without a Content-Length.
+    if request.method == "POST" and request.url.path == "/api/jobs":
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES + MULTIPART_OVERHEAD_BYTES:
+            return _with_security_headers(
+                JSONResponse({"detail": OVERSIZE_DETAIL}, status_code=413)
+            )
+
+    return _with_security_headers(await call_next(request))
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(BASE_DIR / "static" / "index.html")
@@ -347,6 +446,7 @@ def config() -> dict:
         "models": list(MODELS.keys()),
         "default_model": DEFAULT_MODEL,
         "languages": LANGUAGES,
+        "extensions": sorted(ALLOWED_SUFFIXES),
         "ffmpeg": shutil.which("ffmpeg") is not None,
         "quantized": _QUANT_ACTIVE,
     }
@@ -382,16 +482,21 @@ async def create_job(
     dest = UPLOAD_DIR / f"{job_id}{suffix}"
 
     size = 0
-    with dest.open("wb") as out:
-        while chunk := await file.read(8 * 1024 * 1024):
-            size += len(chunk)
-            if size > MAX_UPLOAD_BYTES:
-                out.close()
-                dest.unlink(missing_ok=True)
-                raise HTTPException(413, "File exceeds the 4 GB upload limit")
-            out.write(chunk)
+    try:
+        with dest.open("wb") as out:
+            while chunk := await file.read(8 * 1024 * 1024):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, OVERSIZE_DETAIL)
+                out.write(chunk)
+    except BaseException:
+        # Includes the client disconnecting mid-upload, which raises a
+        # cancellation that is not an Exception.
+        dest.unlink(missing_ok=True)
+        raise
 
     with jobs_lock:
+        _prune_jobs_locked()
         jobs[job_id] = {
             "id": job_id,
             "status": "queued",
@@ -430,43 +535,53 @@ def list_transcripts() -> dict:
     for path in TRANSCRIPTS_DIR.glob("*.json"):
         try:
             transcripts.append(_transcript_summary(_read_transcript(path)))
-        except (OSError, ValueError, TypeError):
+        except Exception:
             # A damaged or partially copied file should not make the entire
             # history inaccessible.
             continue
-    transcripts.sort(key=lambda item: item.get("finished_at") or 0, reverse=True)
+    transcripts.sort(key=lambda item: item["finished_at"] or 0, reverse=True)
     return {"transcripts": transcripts}
 
 
 @app.get("/api/transcripts/{transcript_id}")
 def get_transcript(transcript_id: str) -> dict:
     path = _transcript_path(transcript_id)
-    if not path.exists():
-        raise HTTPException(404, "Transcript not found")
     try:
-        return _read_transcript(path)
+        transcript = _read_transcript(path)
+    except FileNotFoundError:
+        raise HTTPException(404, "Transcript not found") from None
     except (OSError, ValueError) as exc:
         raise HTTPException(500, f"Could not read transcript: {exc}") from exc
+    if not isinstance(transcript, dict):
+        raise HTTPException(500, "Could not read transcript: it is not a JSON object")
+    return transcript
 
 
 @app.delete("/api/transcripts/{transcript_id}", status_code=204)
 def delete_transcript(transcript_id: str) -> Response:
     path = _transcript_path(transcript_id)
-    if not path.exists():
-        raise HTTPException(404, "Transcript not found")
-    path.unlink()
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        raise HTTPException(404, "Transcript not found") from None
+    # Otherwise GET /api/jobs/{id} would keep serving the deleted text.
+    _forget_jobs(transcript_id)
     return Response(status_code=204)
 
 
 @app.delete("/api/transcripts")
 def delete_all_transcripts() -> dict:
     deleted = 0
-    for path in TRANSCRIPTS_DIR.glob("*.json"):
+    removed_ids = []
+    # *.json.tmp too: a crashed write must not leave an invisible transcript.
+    for path in TRANSCRIPTS_DIR.glob("*.json*"):
         try:
             path.unlink()
-            deleted += 1
         except FileNotFoundError:
-            pass
+            continue
+        deleted += 1
+        removed_ids.append(path.name.split(".", 1)[0])
+    _forget_jobs(*removed_ids)
     return {"deleted": deleted}
 
 
