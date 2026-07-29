@@ -7,6 +7,11 @@ updates:
     groups:
       python-runtime:
         patterns: ["*"]
+    ignore:
+      # pydantic pins pydantic-core to an exact version, so the core can only
+      # move when pydantic itself moves. Bumping it on its own resolves to a
+      # lock no pydantic release accepts, and the macOS build fails outright.
+      - dependency-name: "pydantic-core"
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
