@@ -30,12 +30,51 @@ with `make app`. Signed and notarized binaries are planned for v0.2.
 
 ### Fixed
 
+- Right Command is now detected by its device-specific modifier bit, so holding
+  the other Command key no longer swallows the key release and leaves dictation
+  recording indefinitely
+- Dictation no longer claims "Text inserted" when Accessibility access is
+  missing; the transcript is left on the clipboard and the failure is reported
+- Desktop dictation reports a restarted server instead of freezing for ten
+  minutes, and cleans up its recording when stopped with SIGTERM
+- The browser stops polling a job the server no longer has, and overlapping
+  uploads can no longer strand a polling timer that re-renders the page forever
+- Re-selecting the same file in the picker starts a new transcription again
+- A partial transcript stays readable and exportable when a job fails part-way
+- Subtitle export no longer inserts a space between every character for
+  Chinese, Japanese, Korean, and Thai
+- A damaged transcript file no longer makes the entire history return 500
+- Transcript writes are flushed before the atomic rename, and a failed write no
+  longer leaves an invisible `.json.tmp` orphan behind
+- Deleting a transcript also drops the finished job, which was still serving the
+  deleted text from memory
+- Finished jobs are evicted, so a long-running server no longer retains every
+  transcript it has ever produced in memory
+- Stopping the server no longer silently runs the whole queue to completion
+- Oversized uploads are refused before the request body is written to disk, and
+  a rejected upload no longer leaves a partial temporary file
+- `Stop Qwen Scribe` confirms the process actually exited instead of reporting
+  success and leaving an orphan
+- `make setup` replaces an environment broken by a Python upgrade instead of
+  skipping installation and leaving it empty
+- Release archives include `NOTICE`, as Apache-2.0 section 4(d) requires, and
+  are named after the version of the app bundle they actually contain
 - Made the native recorder the app bundle's declared main executable so macOS
   Accessibility, Input Monitoring, and Microphone permissions persist across
   normal stop/start cycles
 
+### Security
+
+- Removed the test-only `testserver` hostname from the production Host
+  allow-list, which had left a permanent hole in the DNS-rebinding check
+- Rejected requests now carry the same security headers as accepted ones
+
 ### Changed
 
+- Documented minimum Python is now 3.12, matching what the pinned dependency
+  lock can actually install; it previously promised 3.10
+- The web interface takes its supported-format list from the server instead of
+  a hardcoded copy that had drifted
 - Added reviewed direct dependencies and a fully resolved runtime lock
 - Removed remote web-font requests in favor of macOS system fonts
 - Raised the documented and bundled minimum to macOS 14 for current MLX

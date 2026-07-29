@@ -17,18 +17,20 @@ early beta, so small, well-tested changes are especially valuable.
 
 ## Development setup
 
-An Apple Silicon Mac with macOS 14+, Python 3.10+, and Apple Command Line Tools
+An Apple Silicon Mac with macOS 14+, Python 3.12+, and Apple Command Line Tools
 is required for full development.
 
 ```bash
-make setup
+make setup       # runtime environment from requirements-lock.txt
+make setup-test  # the lighter dependency set CI uses
 make check
 make app
 ```
 
 The Python/API test suite deliberately imports MLX lazily. On non-Mac systems,
-CI installs `requirements-test.txt` and can test history and request security
-without downloading a model.
+CI installs `requirements-test.txt` and can test history, upload validation,
+and request security without downloading a model. Use `make setup-test` to
+reproduce that environment locally when a test passes for you but fails in CI.
 
 ## Pull requests
 
