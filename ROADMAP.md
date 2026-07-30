@@ -14,14 +14,19 @@ The roadmap favors a trustworthy small release before adding many features.
 
 ## v0.2 — dependable distribution
 
-- Developer ID signing and Apple notarization
-- Automated release workflow with checksums and provenance notes
-- In-app configurable dictation hotkey, model, and language
-- Menu-bar status and explicit quit/restart controls
-- Search and export across saved transcripts
+- [ ] Developer ID signing and Apple notarization — the release workflow signs
+      automatically once the owner's Developer ID secrets are configured, and
+      `scripts/notarize.sh` staples; blocked only on the credentials
+- [x] Automated release workflow with checksums and provenance notes
+- [x] In-app configurable dictation hotkey, model, and language
+- [x] Menu-bar status and explicit quit/restart controls
+- [x] Search and export across saved transcripts
 
 ## v0.3 — broader workflow support
 
+- Fn as a push-to-talk key — needs IOHIDManager tracking of the physical key,
+  because macOS synthesizes fn-flagged events around every arrow/navigation
+  key and a naive listener would start dictation on PageUp
 - Optional launch at login
 - Editable transcript titles and text
 - Batch import and export

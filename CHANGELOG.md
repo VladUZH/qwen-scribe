@@ -6,7 +6,27 @@ details when clearly documented.
 
 ## [Unreleased]
 
-Nothing yet.
+## [0.2.0-beta.1] - 2026-07-30
+
+### Added
+
+- Menu-bar status item with live dictation state, a push-to-talk key picker,
+  and explicit Open, Restart Server, and Quit controls
+- In-app dictation settings — push-to-talk key (right Command, right Option,
+  or right Control), model, and language — persisted by the server and
+  applied by the desktop helper within seconds
+- Search across saved transcripts, matching filenames and full text
+- Export of every saved transcript as one zip of plain-text files plus the
+  complete JSON
+- Tag-triggered release workflow that drafts a GitHub release with SHA-256
+  checksums and provenance notes, and signs with a Developer ID when
+  repository secrets are configured; `scripts/notarize.sh` and `RELEASING.md`
+  cover the release-owner steps
+
+### Changed
+
+- The dictation card in the web interface shows the configured push-to-talk
+  key instead of assuming right Command
 
 ## [0.1.0-beta.1] - 2026-07-29
 
@@ -87,5 +107,6 @@ with `make app`. Signed and notarized binaries are planned for v0.2.
   developer `.venv`
 - Model weights and generated app bundles are explicitly excluded from source
 
-[Unreleased]: https://github.com/VladUZH/qwen-scribe/compare/v0.1.0-beta.1...HEAD
+[Unreleased]: https://github.com/VladUZH/qwen-scribe/compare/v0.2.0-beta.1...HEAD
+[0.2.0-beta.1]: https://github.com/VladUZH/qwen-scribe/compare/v0.1.0-beta.1...v0.2.0-beta.1
 [0.1.0-beta.1]: https://github.com/VladUZH/qwen-scribe/releases/tag/v0.1.0-beta.1

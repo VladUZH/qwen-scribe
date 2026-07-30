@@ -11,6 +11,9 @@ key.
   in `~/Library/Application Support/Qwen Scribe/transcripts`. That is the
   default location; `QWEN_SCRIBE_DATA_DIR` overrides it, so check that variable
   before assuming where transcripts are on a given install.
+- Preferences (the dictation push-to-talk key, model, and language) are stored
+  in `~/Library/Application Support/Qwen Scribe/settings.json`. They contain no
+  audio, text, or identifiers.
 - The app's Python runtime lives in
   `~/Library/Application Support/Qwen Scribe/runtime`.
 - Diagnostic output is written to `~/Library/Logs/QwenScribe.log` and may

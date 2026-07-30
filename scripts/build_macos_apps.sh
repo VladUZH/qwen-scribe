@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="${DIST_DIR:-$ROOT/dist}"
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.2.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 IDENTITY="${CODESIGN_IDENTITY:--}"
 APP="$DIST/Qwen Scribe.app"
@@ -49,7 +49,10 @@ if [[ "$IDENTITY" == "-" ]]; then
   codesign --force --sign - "$APP"
   codesign --force --sign - "$STOP_APP"
 else
-  codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+  # The hardened runtime blocks microphone capture without this entitlement,
+  # so a signed release without it ships with dictation silently broken.
+  codesign --force --options runtime --timestamp \
+    --entitlements "$ROOT/macos/QwenScribe.entitlements" --sign "$IDENTITY" "$APP"
   codesign --force --options runtime --timestamp --sign "$IDENTITY" "$STOP_APP"
 fi
 

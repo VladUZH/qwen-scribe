@@ -20,11 +20,12 @@ Qwen Scribe transcribes audio and video with
 GPU. There is no account, API key, or Qwen Scribe cloud service. Audio and
 transcript text stay on the Mac.
 
-> **Project status:** `v0.1.0-beta.1`. Core transcription, history, and
+> **Project status:** `v0.2.0-beta.1`. Core transcription, history, and
 > dictation work. Releases are source-only for now: app builds are not yet
 > Developer ID signed or notarized, so you build locally with `make app`.
-> Signed and notarized binaries are planned for v0.2, see [ROADMAP.md](ROADMAP.md).
-> Feedback and careful testing are welcome.
+> Release automation is in place ([RELEASING.md](RELEASING.md)); signed and
+> notarized binaries follow once Developer ID credentials are configured, see
+> [ROADMAP.md](ROADMAP.md). Feedback and careful testing are welcome.
 
 <p align="center">
   <img src="docs/assets/hero.png" width="900" alt="Qwen Scribe interface showing local transcription options, a synthetic transcript, and saved transcript history">
@@ -38,10 +39,13 @@ transcript text stay on the Mac.
 - Qwen3-ASR 1.7B for accuracy or 0.6B for speed
 - Automatic language detection, optional forced language, vocabulary hints,
   word timestamps, and SRT export
-- Automatic local transcript history with reopen, individual delete, and
-  delete-all controls
-- Hold **right Command** in any text field, speak, then release to transcribe
-  locally and paste at the cursor
+- Automatic local transcript history with search, reopen, export-all,
+  individual delete, and delete-all controls
+- Hold the configured **push-to-talk key** (right Command by default; right
+  Option or right Control if you prefer) in any text field, speak, then
+  release to transcribe locally and paste at the cursor
+- Menu-bar status item with the dictation state, a push-to-talk key picker,
+  and explicit restart and quit controls
 - A non-focus-stealing HUD for **Listening**, **Transcribing**, success, and
   failure states
 - Localhost-only API with Host and browser-origin checks
@@ -85,7 +89,8 @@ from `dist/` to `/Applications` after building:
 - `Stop Qwen Scribe.app` stops only processes started by Qwen Scribe.
 
 An app built locally is ad-hoc signed. If Gatekeeper blocks a downloaded build,
-right-click it and choose **Open** once. Stable public binaries should be signed
+open it once, then approve it under **System Settings → Privacy & Security →
+Open Anyway** (macOS 15 removed the right-click **Open** bypass). Stable public binaries should be signed
 with an Apple Developer ID and notarized; see [ROADMAP.md](ROADMAP.md).
 
 Server logs are written to `~/Library/Logs/QwenScribe.log`.
@@ -105,7 +110,7 @@ are cached.
 Desktop dictation starts with the Mac app. On first launch, allow Qwen Scribe in
 **System Settings → Privacy & Security** for:
 
-- **Microphone** — records while right Command is held
+- **Microphone** — records while the push-to-talk key is held
 - **Input Monitoring** — detects that modifier while another app is active
 - **Accessibility** — pastes the finished text into the focused field
 
@@ -113,8 +118,9 @@ After changing Input Monitoring or Accessibility, stop and reopen Qwen Scribe.
 File transcription remains available when these optional permissions are not
 granted.
 
-The helper watches modifier-change events and reacts only to the right Command
-key. It snapshots the pasteboard in memory, pastes the transcription, and
+The helper watches modifier-change events and reacts only to the configured
+push-to-talk key (right Command unless you change it in the web interface or
+the menu bar). It snapshots the pasteboard in memory, pastes the transcription, and
 restores the previous pasteboard if it has not changed. Without Accessibility
 access it cannot insert text at all, so it leaves the transcript on the
 clipboard and reports the failure instead of claiming success. See
@@ -125,6 +131,7 @@ clipboard and reports the failure instead of claiming success. See
 | Data | Default location |
 | --- | --- |
 | Saved transcripts | `~/Library/Application Support/Qwen Scribe/transcripts` |
+| Settings | `~/Library/Application Support/Qwen Scribe/settings.json` |
 | Private runtime | `~/Library/Application Support/Qwen Scribe/runtime` |
 | Diagnostic log | `~/Library/Logs/QwenScribe.log` |
 | Downloaded models | `~/.cache/huggingface/hub` |
@@ -187,7 +194,7 @@ Browser UI ──localhost──> FastAPI job queue ──> MLX / Qwen3-ASR
                                   │
                                   └──> local JSON transcript history
 
-Right Command ──> native macOS helper ──> temporary WAV ──> same job queue
+Push-to-talk ──> native macOS helper ──> temporary WAV ──> same job queue
         focused app <── restored clipboard + Command-V <── transcript
 ```
 

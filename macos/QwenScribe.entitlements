@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The hardened runtime (enabled for Developer ID release signing)
+         denies microphone capture outright unless this entitlement is
+         present — the TCC prompt never even appears. Ad-hoc dev builds do
+         not enable the hardened runtime, so they work without it; a signed
+         release without it ships with dictation silently broken. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>

@@ -1,0 +1,139 @@
+name: Release
+
+# Pushing a tag like v0.2.0 or v0.2.0-beta.1 builds the apps, packages the
+# archive, and creates a DRAFT GitHub release with SHA-256 checksums and
+# provenance notes. The release owner reviews the draft — and, until Developer
+# ID credentials are configured, optionally signs/notarizes locally — before
+# publishing. See RELEASING.md.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build and draft the release
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Resolve the shipped dependency lock
+        run: python -m pip install --dry-run --ignore-installed -r requirements-lock.txt
+
+      - name: Run tests and repository checks
+        env:
+          QWEN_SCRIBE_DATA_DIR: ${{ runner.temp }}/qwen-scribe-test-data
+          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/qwen-scribe-pycache
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements-test.txt
+          python -m unittest discover -s tests
+          python scripts/check_repo.py
+
+      - name: Derive versions from the tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # CFBundleShortVersionString must not carry a -beta suffix.
+          echo "bundle=${TAG%%-*}" >> "$GITHUB_OUTPUT"
+
+      - name: Import Developer ID certificate when configured
+        env:
+          CERT_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+        run: |
+          if [ -z "$CERT_P12_BASE64" ] || [ -z "$IDENTITY" ]; then
+            echo "signing=ad-hoc" >> "$GITHUB_ENV"
+            echo "No Developer ID certificate configured; the build is ad-hoc signed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 900 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "signing=developer-id" >> "$GITHUB_ENV"
+
+      - name: Build app bundles
+        env:
+          VERSION: ${{ steps.version.outputs.bundle }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: make app
+
+      - name: Package release archive
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: ./scripts/package_release.sh
+
+      - name: Compute checksums
+        run: |
+          cd dist
+          shasum -a 256 Qwen-Scribe-*.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Compose provenance notes
+        run: |
+          {
+            echo "Draft release built by CI from tag \`$GITHUB_REF_NAME\`."
+            echo
+            echo "## Provenance"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Source commit | \`$GITHUB_SHA\` |"
+            echo "| Workflow run | $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID |"
+            echo "| Builder | GitHub-hosted \`macos-15\` (macOS $(sw_vers -productVersion), $(uname -m)) |"
+            echo "| Compiler | $(clang --version | head -1) |"
+            echo "| Python | $(python3 --version 2>&1) |"
+            echo "| Dependency lock | \`$(shasum -a 256 requirements-lock.txt | cut -c1-16)…\` (requirements-lock.txt) |"
+            echo "| Signing | ${signing:-ad-hoc} |"
+            echo
+            echo "## Checksums"
+            echo
+            echo '```'
+            cat dist/SHA256SUMS.txt
+            echo '```'
+            if [ "${signing:-ad-hoc}" = "ad-hoc" ]; then
+              echo
+              echo "> This build is ad-hoc signed and not notarized. macOS will block the"
+              echo "> first launch: open it once, then approve it under **System Settings"
+              echo "> → Privacy & Security → Open Anyway** (macOS 15 removed the old"
+              echo "> right-click-Open bypass)."
+            fi
+            echo
+            echo "To reproduce: \`git checkout $GITHUB_REF_NAME && make app\` on an"
+            echo "Apple Silicon Mac with the Apple Command Line Tools."
+          } > release-notes.md
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # A re-run for the same tag updates the existing release instead
+            # of stacking a second draft with the same title.
+            gh release upload "$GITHUB_REF_NAME" --clobber \
+              dist/Qwen-Scribe-*.zip dist/SHA256SUMS.txt
+            gh release edit "$GITHUB_REF_NAME" --notes-file release-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --title "Qwen Scribe $GITHUB_REF_NAME" \
+              --notes-file release-notes.md \
+              dist/Qwen-Scribe-*.zip dist/SHA256SUMS.txt
+          fi
