@@ -121,6 +121,9 @@
   .dictation-status.ready::before { background: var(--ok); }
   .dictation-status.needs-permission { color: var(--amber); }
   .dictation-status.needs-permission::before { background: var(--amber); }
+  .dictation-settings { margin-top: 12px; }
+  .settings-note { color: var(--muted); font-size: 11.5px; }
+  .settings-note.error { color: var(--err); }
   kbd { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 3px 7px; white-space: nowrap; }
 
   /* Job card */
@@ -201,6 +204,18 @@
   /* Saved transcripts */
   .history { margin-top: 52px; padding-top: 28px; border-top: 1px solid var(--line); }
   .history-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+  .history-controls { display: flex; align-items: center; gap: 8px; }
+  .history-controls input[type=search] {
+    width: 180px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
+    padding: 7px 10px;
+  }
+  .history-controls input[type=search]:focus { border-color: var(--amber); outline: none; }
   .history-title { display: flex; align-items: baseline; gap: 9px; }
   .history h2 { font-size: 16px; font-weight: 600; }
   .history-count { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); }
@@ -224,6 +239,9 @@
     .dictation-status { display: none; }
     .history-item-head, .history-foot { align-items: flex-start; }
     .history-foot { flex-direction: column; }
+    .history-head { flex-direction: column; align-items: flex-start; }
+    .history-controls { flex-wrap: wrap; }
+    .history-controls input[type=search] { width: 100%; }
   }
 </style>
 </head>
@@ -268,12 +286,28 @@
   </div>
 
   <div class="dictation" aria-live="polite">
-    <kbd>Right ⌘</kbd>
+    <kbd id="dictationKey">Right ⌘</kbd>
     <div class="dictation-copy">
       <div class="dictation-title">Desktop dictation</div>
       <p>Hold in any text field to record; release to transcribe and paste. macOS may ask for Microphone, Accessibility, and Input Monitoring access.</p>
     </div>
     <div class="dictation-status" id="dictationStatus">starting</div>
+  </div>
+
+  <div class="options dictation-settings" id="dictationSettings" hidden>
+    <div class="field">
+      <label for="setHotkey">Push-to-talk key</label>
+      <select id="setHotkey"></select>
+    </div>
+    <div class="field">
+      <label for="setModel">Dictation model</label>
+      <select id="setModel"></select>
+    </div>
+    <div class="field">
+      <label for="setLanguage">Dictation language</label>
+      <select id="setLanguage"></select>
+    </div>
+    <div class="settings-note field-wide" id="settingsNote">Changes apply to desktop dictation within about ten seconds.</div>
   </div>
 
   <div class="job" id="job">
@@ -305,7 +339,11 @@
         <h2 id="historyHeading">Saved transcripts</h2>
         <span class="history-count" id="historyCount"></span>
       </div>
-      <button class="act danger" id="btnDeleteAll" hidden>Delete all</button>
+      <div class="history-controls">
+        <input type="search" id="historySearch" placeholder="Search transcripts" aria-label="Search saved transcripts" hidden>
+        <button class="act" id="btnExportAll" hidden>Export all</button>
+        <button class="act danger" id="btnDeleteAll" hidden>Delete all</button>
+      </div>
     </div>
     <div class="history-list" id="historyList">
       <div class="history-empty">Loading saved transcripts…</div>
@@ -666,12 +704,105 @@
     }
   }
 
+  // ── Dictation settings ────────────────────────────────────────────────
+  const HOTKEY_LABELS = {};
+  const MODEL_LABELS = { "1.7b": "1.7B — accuracy", "0.6b": "0.6B — speed" };
+  const settingsNote = $("settingsNote");
+  const defaultSettingsNote = settingsNote.textContent;
+
+  async function loadSettings() {
+    let body;
+    try {
+      const res = await fetch("/api/settings");
+      if (!res.ok) return;
+      body = await res.json();
+    } catch { return; }
+    const fill = (sel, options, value) => {
+      sel.replaceChildren();
+      for (const item of options) {
+        const o = document.createElement("option");
+        o.value = typeof item === "object" ? item.id : item;
+        o.textContent = typeof item === "object" ? item.label
+          : item === "auto" ? "Auto-detect"
+          : MODEL_LABELS[item] || item;
+        sel.appendChild(o);
+      }
+      sel.value = value;
+    };
+    for (const h of body.options.hotkeys) HOTKEY_LABELS[h.id] = h.label;
+    fill($("setHotkey"), body.options.hotkeys, body.dictation.hotkey);
+    fill($("setModel"), body.options.models, body.dictation.model);
+    fill($("setLanguage"), body.options.languages, body.dictation.language);
+    $("dictationKey").textContent = HOTKEY_LABELS[body.dictation.hotkey] || "Right ⌘";
+    $("dictationSettings").hidden = false;
+  }
+
+  // Two quick changes race: the first PUT's response must not overwrite the
+  // second's state, and a failed save must not "restore" stale selects.
+  let settingsSeq = 0;
+
+  async function saveSetting(key, value) {
+    const seq = ++settingsSeq;
+    settingsNote.classList.remove("error");
+    settingsNote.textContent = "Saving…";
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dictation: { [key]: value } }),
+      });
+      if (seq !== settingsSeq) return;
+      if (!res.ok) throw new Error();
+      const body = await res.json();
+      if (seq !== settingsSeq) return;
+      $("dictationKey").textContent = HOTKEY_LABELS[body.dictation.hotkey] || $("dictationKey").textContent;
+      settingsNote.textContent = "Saved. " + defaultSettingsNote;
+    } catch {
+      if (seq !== settingsSeq) return;
+      settingsNote.classList.add("error");
+      settingsNote.textContent = "Could not save — is the server still running?";
+      loadSettings();   // fall back to what the server actually has
+    }
+  }
+  [["setHotkey", "hotkey"], ["setModel", "model"], ["setLanguage", "language"]].forEach(([id, key]) =>
+    $(id).addEventListener("change", e => saveSetting(key, e.target.value)));
+
+  // ── Saved transcripts ─────────────────────────────────────────────────
+  let searchTimer = null;
+  $("historySearch").addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(loadHistory, 250);
+  });
+  $("btnExportAll").addEventListener("click", async () => {
+    // fetch + blob rather than navigation: a 404 (nothing to export) or a
+    // dead server must not replace the page with a raw error body.
+    const button = $("btnExportAll");
+    button.disabled = true;
+    try {
+      const res = await fetch("/api/transcripts/export");
+      if (!res.ok) throw new Error();
+      download("qwen-scribe-transcripts.zip", await res.blob(), "application/zip");
+    } catch {
+      button.textContent = "Nothing to export";
+      setTimeout(() => { button.textContent = "Export all"; }, 1600);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  // Out-of-order search responses must never render: a slow "berl" response
+  // arriving after the fast "berlin" one would show the wrong list.
+  let historySeq = 0;
+
   async function loadHistory() {
+    const seq = ++historySeq;
     const list = $("historyList");
+    const query = $("historySearch").value.trim();
     let response;
     try {
-      response = await fetch("/api/transcripts");
+      response = await fetch(`/api/transcripts${query ? `?q=${encodeURIComponent(query)}` : ""}`);
     } catch {
+      if (seq !== historySeq) return;
       list.replaceChildren();
       const empty = document.createElement("div");
       empty.className = "history-empty";
@@ -679,16 +810,22 @@
       list.appendChild(empty);
       return;
     }
-    if (!response.ok) return;
+    if (seq !== historySeq || !response.ok) return;
     const { transcripts = [] } = await response.json();
+    if (seq !== historySeq) return;
+    const anyToShow = transcripts.length > 0 || query !== "";
     $("historyCount").textContent = transcripts.length ? String(transcripts.length) : "";
-    $("btnDeleteAll").hidden = transcripts.length === 0;
+    $("historySearch").hidden = !anyToShow;
+    $("btnExportAll").hidden = !anyToShow;
+    $("btnDeleteAll").hidden = !anyToShow;
     list.replaceChildren();
 
     if (!transcripts.length) {
       const empty = document.createElement("div");
       empty.className = "history-empty";
-      empty.textContent = "Completed transcripts will be saved here automatically.";
+      empty.textContent = query
+        ? "No saved transcripts match your search."
+        : "Completed transcripts will be saved here automatically.";
       list.appendChild(empty);
       return;
     }
@@ -769,6 +906,9 @@
       status.textContent = message;
       status.classList.toggle("ready", ready);
       status.classList.toggle("needs-permission", needsPermission);
+      // The hotkey can also change from the menu bar; the status poll keeps
+      // the badge honest either way.
+      if (state.shortcut) $("dictationKey").textContent = state.shortcut;
     } catch {
       status.textContent = "not running";
       status.classList.remove("ready");
@@ -776,6 +916,7 @@
     }
   }
 
+  loadSettings();
   loadHistory();
   refreshDictationStatus();
   setInterval(refreshDictationStatus, 5000);
