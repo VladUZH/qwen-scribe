@@ -54,6 +54,21 @@ else
   codesign --force --options runtime --timestamp \
     --entitlements "$ROOT/macos/QwenScribe.entitlements" --sign "$IDENTITY" "$APP"
   codesign --force --options runtime --timestamp --sign "$IDENTITY" "$STOP_APP"
+
+  # Assert the entitlement actually survived signing — the failure mode it
+  # guards against is silent (no prompt, no error, dictation just records
+  # nothing). The dots in the key must be escaped: plutil treats unescaped
+  # dots as key-path separators and would report the entitlement missing
+  # from a perfectly good build.
+  EMBEDDED="$(codesign -d --entitlements - --xml "$APP" 2>/dev/null || true)"
+  if [[ -z "$EMBEDDED" ]]; then
+    echo "Signed build carries no entitlements — dictation would lose the microphone." >&2
+    exit 1
+  fi
+  if [[ "$(printf '%s' "$EMBEDDED" | plutil -extract 'com\.apple\.security\.device\.audio-input' raw - 2>/dev/null)" != "true" ]]; then
+    echo "The audio-input entitlement is missing from the signed build." >&2
+    exit 1
+  fi
 fi
 
 codesign --verify --deep --strict "$APP"

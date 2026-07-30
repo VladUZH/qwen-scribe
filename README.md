@@ -21,11 +21,14 @@ GPU. There is no account, API key, or Qwen Scribe cloud service. Audio and
 transcript text stay on the Mac.
 
 > **Project status:** `v0.2.0-beta.1`. Core transcription, history, and
-> dictation work. Releases are source-only for now: app builds are not yet
-> Developer ID signed or notarized, so you build locally with `make app`.
-> Release automation is in place ([RELEASING.md](RELEASING.md)); signed and
-> notarized binaries follow once Developer ID credentials are configured, see
-> [ROADMAP.md](ROADMAP.md). Feedback and careful testing are welcome.
+> dictation work. A downloadable beta build exists on the
+> [releases page](https://github.com/VladUZH/qwen-scribe/releases); it is
+> ad-hoc signed, so macOS blocks the first launch until you approve it under
+> **System Settings → Privacy & Security → Open Anyway** — building from
+> source with `make app` avoids that hoop. Developer ID-signed and notarized
+> binaries follow once credentials are configured
+> ([RELEASING.md](RELEASING.md), [ROADMAP.md](ROADMAP.md)). Feedback and
+> careful testing are welcome.
 
 <p align="center">
   <img src="docs/assets/hero.png" width="900" alt="Qwen Scribe interface showing local transcription options, a synthetic transcript, and saved transcript history">

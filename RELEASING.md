@@ -46,20 +46,43 @@ release notes:
 | `MACOS_CERTIFICATE_PASSWORD` | password for the p12 |
 | `MACOS_CODESIGN_IDENTITY` | e.g. `Developer ID Application: Name (TEAMID)` |
 
-## Notarization (release-owner step, local)
+## Notarization
 
-Notarization needs an Apple Developer account and is deliberately not run in
-CI. After the draft exists and the build is Developer ID signed:
+Two supported paths. Both produce a draft whose `SHA256SUMS.txt` matches the
+archive users download — the ordering guarantee that matters.
+
+### In CI (recommended once credentials exist)
+
+Add three more repository secrets and the workflow notarizes and staples
+*before* packaging and checksumming, so the draft is correct by construction:
+
+| Secret | Content |
+| --- | --- |
+| `APPLE_API_KEY_ID` | App Store Connect API key ID |
+| `APPLE_API_ISSUER_ID` | App Store Connect issuer ID |
+| `APPLE_API_KEY_P8` | the `.p8` key file, base64 |
+
+Create the key under App Store Connect → Users and Access → Integrations,
+with the Developer role. If keeping notarization credentials out of GitHub is
+preferred, skip these secrets and use the local path.
+
+### Locally (fallback / escape hatch)
+
+After the draft exists and the build is Developer ID signed:
 
 ```bash
 xcrun notarytool store-credentials qwen-scribe \
   --apple-id <apple-id> --team-id <team-id> --password <app-specific-password>
 scripts/notarize.sh dist/Qwen-Scribe-<version>-macos-arm64.zip
-shasum -a 256 dist/Qwen-Scribe-<version>-macos-arm64.zip   # update SHA256SUMS.txt
 ```
 
-Upload the stapled archive and the corrected `SHA256SUMS.txt` to the draft,
-then publish.
+The script staples, re-packs, and **regenerates `SHA256SUMS.txt` itself** —
+re-packing changes the hash, and a stale published checksum makes a legitimate
+build look tampered with. Re-upload *both* files together:
+
+```bash
+gh release upload v<version> --clobber dist/Qwen-Scribe-*.zip dist/SHA256SUMS.txt
+```
 
 ## Verifying a download (for users)
 

@@ -40,6 +40,21 @@ ditto -c -k --sequesterRsrc --keepParent "$STAGE" "$ARCHIVE"
 echo "Verifying…"
 spctl --assess --type execute --verbose "$STAGE/Qwen Scribe.app"
 
+# Re-packing changed the archive's hash. Regenerate the checksum file here so
+# a stale published SHA256SUMS.txt can never make a legitimate stapled build
+# look tampered with — forgetting this step manually was the failure mode.
+SUMS="$(dirname "$ARCHIVE")/SHA256SUMS.txt"
+ARCHIVE_NAME="$(basename "$ARCHIVE")"
+NEW_LINE="$(cd "$(dirname "$ARCHIVE")" && shasum -a 256 "$ARCHIVE_NAME")"
+if [[ -f "$SUMS" ]]; then
+  grep -vF "  $ARCHIVE_NAME" "$SUMS" > "$SUMS.tmp" || true
+  printf '%s\n' "$NEW_LINE" >> "$SUMS.tmp"
+  mv "$SUMS.tmp" "$SUMS"
+else
+  printf '%s\n' "$NEW_LINE" > "$SUMS"
+fi
+
 echo
-echo "Done. Recompute the checksum before uploading:"
-echo "  shasum -a 256 $ARCHIVE"
+echo "Done. $SUMS now matches the stapled archive."
+echo "Re-upload BOTH files to the release together:"
+echo "  gh release upload <tag> --clobber \"$ARCHIVE\" \"$SUMS\""

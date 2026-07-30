@@ -75,6 +75,32 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
         run: make app
 
+      # Ordering matters: notarize and staple BEFORE packaging and checksums,
+      # so SHA256SUMS.txt always describes the archive users download. The
+      # previous design stapled locally after the checksum was published,
+      # which rewrote the zip and made a legitimate build look tampered with.
+      - name: Notarize and staple when configured
+        env:
+          API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          if [ "${signing:-ad-hoc}" != "developer-id" ] || [ -z "$API_KEY_P8_BASE64" ]; then
+            echo "notarized=no" >> "$GITHUB_ENV"
+            echo "Notarization skipped: needs Developer ID signing plus App Store Connect API secrets." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          KEY_FILE="$RUNNER_TEMP/notary-key.p8"
+          echo "$API_KEY_P8_BASE64" | base64 --decode > "$KEY_FILE"
+          SUBMISSION="$RUNNER_TEMP/notary-submission.zip"
+          # One submission covering both apps; stapling is per-bundle.
+          ditto -c -k --sequesterRsrc "dist" "$SUBMISSION"
+          xcrun notarytool submit "$SUBMISSION" \
+            --key "$KEY_FILE" --key-id "$API_KEY_ID" --issuer "$API_ISSUER_ID" --wait
+          xcrun stapler staple "dist/Qwen Scribe.app"
+          xcrun stapler staple "dist/Stop Qwen Scribe.app"
+          echo "notarized=yes" >> "$GITHUB_ENV"
+
       - name: Package release archive
         env:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
@@ -102,6 +128,7 @@ jobs:
             echo "| Python | $(python3 --version 2>&1) |"
             echo "| Dependency lock | \`$(shasum -a 256 requirements-lock.txt | cut -c1-16)…\` (requirements-lock.txt) |"
             echo "| Signing | ${signing:-ad-hoc} |"
+            echo "| Notarized | ${notarized:-no} |"
             echo
             echo "## Checksums"
             echo
@@ -114,6 +141,17 @@ jobs:
               echo "> first launch: open it once, then approve it under **System Settings"
               echo "> → Privacy & Security → Open Anyway** (macOS 15 removed the old"
               echo "> right-click-Open bypass)."
+            else
+              echo
+              echo "> **Upgrading from an earlier ad-hoc build?** Signing changed the"
+              echo "> app's identity, and macOS keys privacy grants to that identity —"
+              echo "> re-grant Microphone, Input Monitoring, and Accessibility once."
+              if [ "${notarized:-no}" = "no" ]; then
+                echo ">"
+                echo "> Signed but NOT notarized: the owner staples locally with"
+                echo "> scripts/notarize.sh, which rewrites the archive and regenerates"
+                echo "> SHA256SUMS.txt — both files must then be re-uploaded together."
+              fi
             fi
             echo
             echo "To reproduce: \`git checkout $GITHUB_REF_NAME && make app\` on an"
