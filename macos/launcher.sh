@@ -2,8 +2,34 @@
 # Qwen Scribe server launcher — invoked by the native main app process.
 set -u
 
-# Finder starts apps with a minimal PATH.
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+# Finder starts apps with a minimal PATH. Cover the common package managers
+# directly: Homebrew (/opt/homebrew, /usr/local) and MacPorts (/opt/local).
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin:$PATH"
+
+# For anything else (Nix, Fink, custom prefixes), merge in the user's login
+# shell PATH the same way find_python already consults it for Python.
+merge_login_shell_path() {
+  # A chatty shell rc can print arbitrary text before the value, so take the
+  # last line and accept it only if it looks like a PATH: starts with an
+  # absolute path and has no spaces or control characters.
+  local shell_path dir
+  shell_path="$("${SHELL:-/bin/zsh}" -l -c 'printf "%s\n" "$PATH"' 2>/dev/null | tail -1)"
+  case "$shell_path" in
+    /*) ;;
+    *) return 0 ;;
+  esac
+  case "$shell_path" in
+    *" "*|*[![:print:]]*) return 0 ;;
+  esac
+  while IFS= read -r dir; do
+    [ -n "$dir" ] && [ -d "$dir" ] || continue
+    case ":$PATH:" in
+      *":$dir:"*) continue ;;
+    esac
+    PATH="$PATH:$dir"
+  done < <(printf '%s\n' "$shell_path" | tr ':' '\n')
+  export PATH
+}
 export HF_HUB_DISABLE_TELEMETRY=1
 export DO_NOT_TRACK=1
 
@@ -87,6 +113,10 @@ fi
 
 echo "=== $(date) launching ===" >> "$LOG"
 
+# Runs only on a cold start: spawning a login shell can cost a moment with a
+# heavy shell rc, and the already-running fast path above should stay instant.
+merge_login_shell_path
+
 prepare_runtime() {
   mkdir -p "$RUNTIME_DIR/models" || return 1
   /bin/cp -f "$RESOURCES_DIR/server.py" "$RESOURCES_DIR/requirements.txt" "$RESOURCES_DIR/requirements-lock.txt" "$RUNTIME_DIR/" >> "$LOG" 2>&1 || return 1
@@ -152,7 +182,7 @@ if [ "$REQ_HASH" != "$INSTALLED_HASH" ]; then
 fi
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
-  /usr/bin/osascript -e 'display notification "ffmpeg is missing — WAV works, but other media needs: brew install ffmpeg" with title "Qwen Scribe"' 2>/dev/null
+  /usr/bin/osascript -e 'display notification "ffmpeg is missing — WAV works, but other media needs it (brew install ffmpeg / sudo port install ffmpeg)" with title "Qwen Scribe"' 2>/dev/null
 fi
 
 cd "$RUNTIME_DIR" || fail_with_log "Cannot open Qwen Scribe's local runtime."

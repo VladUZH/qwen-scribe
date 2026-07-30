@@ -57,7 +57,10 @@ transcript text stay on the Mac.
   [MLX releases](https://ml-explore.github.io/mlx/build/html/install.html)
 - Native Python 3.12 or newer, as required by the pinned NumPy in
   [requirements-lock.txt](requirements-lock.txt)
-- `ffmpeg` for non-WAV audio and video: `brew install ffmpeg`
+- `ffmpeg` for non-WAV audio and video — Homebrew (`brew install ffmpeg`) or
+  MacPorts (`sudo port install ffmpeg`). The Mac app looks on the standard
+  Homebrew and MacPorts paths and then on your login shell's `PATH`, so any
+  install your terminal can see should work.
 - Apple Command Line Tools to build the app from source:
   `xcode-select --install`
 

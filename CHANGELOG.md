@@ -30,6 +30,11 @@ with `make app`. Signed and notarized binaries are planned for v0.2.
 
 ### Fixed
 
+- The Mac app now finds ffmpeg installed with MacPorts (/opt/local/bin) and,
+  failing that, anywhere on the login shell's PATH — Finder launches previously
+  saw only the Homebrew paths, so MacPorts users were told ffmpeg was missing
+- Error messages and docs no longer assume Homebrew is the only way to install
+  ffmpeg
 - Right Command is now detected by its device-specific modifier bit, so holding
   the other Command key no longer swallows the key release and leaves dictation
   recording indefinitely

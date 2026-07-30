@@ -475,7 +475,8 @@ async def create_job(
 
     if suffix != ".wav" and shutil.which("ffmpeg") is None:
         raise HTTPException(
-            400, "ffmpeg is required for non-WAV files. Install it with: brew install ffmpeg"
+            400, "ffmpeg is required for non-WAV files. Install it with Homebrew "
+                 "(brew install ffmpeg) or MacPorts (sudo port install ffmpeg)."
         )
 
     job_id = uuid.uuid4().hex[:12]

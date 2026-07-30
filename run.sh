@@ -16,7 +16,7 @@ fi
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "Warning: ffmpeg is missing. WAV files still work, but other audio and video need it."
-  echo "Install it with: brew install ffmpeg"
+  echo "Install it with Homebrew (brew install ffmpeg) or MacPorts (sudo port install ffmpeg)."
 fi
 
 # The only routine network activity should be explicit dependency/model
