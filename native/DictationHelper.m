@@ -5,15 +5,40 @@
 #import <math.h>
 
 static NSString *const QSServerBase = @"http://127.0.0.1:8990";
-static const CGKeyCode QSRightCommandKeyCode = 54;
 static const CGKeyCode QSPasteKeyCode = 9;
 
-// NX_DEVICERCMDKEYMASK from <IOKit/hidsystem/IOLLEvent.h>. The device
-// independent NSEventModifierFlagCommand stays set while the LEFT Command key
-// is held, so using it would swallow the right-Command key-up and leave the
-// microphone recording. The low 16 bits of modifierFlags carry the
-// device-dependent bits that say which physical key it was.
-static const NSEventModifierFlags QSRightCommandMask = 0x000010;
+// Push-to-talk keys the user can pick in settings. Ids must match
+// DICTATION_HOTKEYS in server.py.
+//
+// The masks are the device-dependent modifier bits from
+// <IOKit/hidsystem/IOLLEvent.h> (NX_DEVICER*KEYMASK): the device-independent
+// flags (e.g. NSEventModifierFlagCommand) stay set while the OTHER key of the
+// pair is held, which would swallow the key-up and leave the microphone
+// recording. Fn is deliberately NOT offered: macOS synthesizes fn-flagged
+// keyCode-63 flagsChanged events around every arrow/navigation key, so a
+// naive Fn hotkey would start dictation on PageUp. Supporting it needs an
+// IOHIDManager listener for the physical key (roadmapped).
+typedef struct {
+    const char *identifier;
+    CGKeyCode keyCode;       // kVK_* virtual key code
+    NSEventModifierFlags mask;
+    const char *label;
+} QSHotkeySpec;
+
+static const QSHotkeySpec QSHotkeyTable[] = {
+    {"right_command", 54, 0x00000010, "Right \xE2\x8C\x98"},   // NX_DEVICERCMDKEYMASK
+    {"right_option",  61, 0x00000040, "Right \xE2\x8C\xA5"},   // NX_DEVICERALTKEYMASK
+    {"right_control", 62, 0x00002000, "Right \xE2\x8C\x83"},   // NX_DEVICERCTLKEYMASK
+};
+
+static const QSHotkeySpec *QSHotkeyForIdentifier(NSString *identifier) {
+    for (size_t i = 0; i < sizeof(QSHotkeyTable) / sizeof(QSHotkeyTable[0]); i++) {
+        if ([identifier isEqualToString:@(QSHotkeyTable[i].identifier)]) {
+            return &QSHotkeyTable[i];
+        }
+    }
+    return &QSHotkeyTable[0];   // right Command, the historical default
+}
 
 // A held key that is never released (a lost key-up, a Space switch) must not
 // leave dictation recording forever.
@@ -214,7 +239,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 
 @end
 
-@interface QSDictationDelegate : NSObject <NSApplicationDelegate>
+@interface QSDictationDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @property (nonatomic, strong) id globalMonitor;
 @property (nonatomic, strong) id localMonitor;
 @property (nonatomic, strong) NSTimer *heartbeatTimer;
@@ -225,7 +250,13 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 @property (nonatomic, strong) NSDate *recordingStartedAt;
 @property (nonatomic, strong) NSRunningApplication *targetApplication;
 @property (nonatomic, strong) QSDictationHUD *hud;
-@property (nonatomic) BOOL rightCommandIsDown;
+@property (nonatomic, strong) NSStatusItem *statusItem;
+@property (nonatomic) const QSHotkeySpec *hotkey;
+@property (nonatomic, copy) NSString *dictationModel;
+@property (nonatomic, copy) NSString *dictationLanguage;
+@property (nonatomic) BOOL serverReachable;
+@property (nonatomic) BOOL serverTransitionInProgress;
+@property (nonatomic) BOOL hotkeyIsDown;
 @property (nonatomic) BOOL busy;
 @end
 
@@ -260,6 +291,10 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 }
 
 - (void)launchLocalServer {
+    [self launchLocalServerOpeningBrowser:YES];
+}
+
+- (void)launchLocalServerOpeningBrowser:(BOOL)openBrowser {
     NSString *script = [NSBundle.mainBundle pathForResource:@"launch-server" ofType:@"sh"];
     if (!script) {
         [self reportFailure:@"The local server launcher is missing"];
@@ -269,6 +304,13 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     NSTask *task = [[NSTask alloc] init];
     task.executableURL = [NSURL fileURLWithPath:@"/bin/bash"];
     task.arguments = @[script];
+    if (!openBrowser) {
+        // A menu-bar restart should not yank a browser tab into focus.
+        NSMutableDictionary *environment =
+            [NSProcessInfo.processInfo.environment mutableCopy];
+        environment[@"QS_NO_OPEN"] = @"1";
+        task.environment = environment;
+    }
     NSError *error = nil;
     if (![task launchAndReturnError:&error]) {
         [self reportFailure:[NSString stringWithFormat:@"Could not start the local server: %@",
@@ -278,10 +320,14 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    self.hotkey = &QSHotkeyTable[0];
+    self.dictationModel = @"1.7b";
+    self.dictationLanguage = @"auto";
     self.hud = [[QSDictationHUD alloc] init];
     [self writeProcessIdentity];
     [self installTerminationHandler];
     [self sweepStrandedRecordings];
+    [self installStatusItem];
 
     NSDictionary *accessibilityOptions = @{
         (__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES
@@ -373,10 +419,10 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 }
 
 - (void)handleFlagsChanged:(NSEvent *)event {
-    if (event.keyCode != QSRightCommandKeyCode) return;
-    BOOL isDown = (event.modifierFlags & QSRightCommandMask) != 0;
-    if (isDown == self.rightCommandIsDown) return;
-    self.rightCommandIsDown = isDown;
+    if (event.keyCode != self.hotkey->keyCode) return;
+    BOOL isDown = (event.modifierFlags & self.hotkey->mask) != 0;
+    if (isDown == self.hotkeyIsDown) return;
+    self.hotkeyIsDown = isDown;
     if (isDown) [self beginRecording];
     else [self finishRecording];
 }
@@ -429,7 +475,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
                                                                block:^(NSTimer *timer) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf.recorder) return;
-        strongSelf.rightCommandIsDown = NO;
+        strongSelf.hotkeyIsDown = NO;
         [strongSelf finishRecording];
     }];
 }
@@ -470,8 +516,8 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
         QSAppendString(body, [NSString stringWithFormat:@"Content-Disposition: form-data; name=\"%@\"\r\n\r\n", name]);
         QSAppendString(body, [NSString stringWithFormat:@"%@\r\n", value]);
     };
-    appendField(@"model", @"1.7b");
-    appendField(@"language", @"auto");
+    appendField(@"model", self.dictationModel ?: @"1.7b");
+    appendField(@"language", self.dictationLanguage ?: @"auto");
     appendField(@"timestamps", @"false");
     appendField(@"turbo", @"false");
     appendField(@"context", @"");
@@ -683,6 +729,219 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.HTTPMethod = @"POST";
     [[NSURLSession.sharedSession dataTaskWithRequest:request] resume];
+    [self fetchSettings];
+}
+
+// ── Settings (owned by the server; the helper is a follower) ──────────────
+
+- (void)fetchSettings {
+    NSURL *url = [NSURL URLWithString:[QSServerBase stringByAppendingString:@"/api/settings"]];
+    __weak typeof(self) weakSelf = self;
+    [[NSURLSession.sharedSession dataTaskWithURL:url
+                              completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
+        id payload = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        // Any HTTP response means the server is up; only a 200 carries
+        // settings (an older server without /api/settings still answers 404).
+        BOOL reachable = !error && http.statusCode > 0;
+        BOOL ok = reachable && http.statusCode == 200 && [payload isKindOfClass:NSDictionary.class];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            strongSelf.serverReachable = reachable;
+            if (ok) [strongSelf applyDictationSettings:((NSDictionary *)payload)[@"dictation"]];
+        });
+    }] resume];
+}
+
+- (void)applyDictationSettings:(NSDictionary *)dictation {
+    if (![dictation isKindOfClass:NSDictionary.class]) return;
+    NSString *model = dictation[@"model"];
+    if ([model isKindOfClass:NSString.class]) self.dictationModel = model;
+    NSString *language = dictation[@"language"];
+    if ([language isKindOfClass:NSString.class]) self.dictationLanguage = language;
+    NSString *hotkeyIdentifier = dictation[@"hotkey"];
+    if ([hotkeyIdentifier isKindOfClass:NSString.class]) {
+        const QSHotkeySpec *spec = QSHotkeyForIdentifier(hotkeyIdentifier);
+        // Never swap the key out from under an active recording — the old
+        // key's release must still be the thing that stops the microphone.
+        if (spec != self.hotkey && !self.recorder) {
+            self.hotkey = spec;
+            self.hotkeyIsDown = NO;
+        }
+    }
+}
+
+- (void)pushDictationSetting:(NSString *)key value:(NSString *)value {
+    NSURL *url = [NSURL URLWithString:[QSServerBase stringByAppendingString:@"/api/settings"]];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.HTTPMethod = @"PUT";
+    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:@{@"dictation": @{key: value}}
+                                                       options:0 error:nil];
+    __weak typeof(self) weakSelf = self;
+    [[NSURLSession.sharedSession dataTaskWithRequest:request
+                                   completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
+        id payload = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            if (!error && http.statusCode == 200 && [payload isKindOfClass:NSDictionary.class]) {
+                [strongSelf applyDictationSettings:((NSDictionary *)payload)[@"dictation"]];
+            } else {
+                [strongSelf playSound:@"Basso"];
+            }
+        });
+    }] resume];
+}
+
+// ── Menu bar ──────────────────────────────────────────────────────────────
+
+- (void)installStatusItem {
+    self.statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSSquareStatusItemLength];
+    NSImage *icon = [NSImage imageWithSystemSymbolName:@"waveform.circle"
+                              accessibilityDescription:@"Qwen Scribe"];
+    if (icon) {
+        self.statusItem.button.image = icon;
+    } else {
+        self.statusItem.button.title = @"QS";
+    }
+    NSMenu *menu = [[NSMenu alloc] init];
+    menu.delegate = self;
+    menu.autoenablesItems = NO;
+    self.statusItem.menu = menu;
+}
+
+- (NSString *)statusLineTitle {
+    if (!self.serverReachable) return @"Server: starting…";
+    BOOL accessibility = AXIsProcessTrusted();
+    BOOL inputMonitoring = CGPreflightListenEventAccess();
+    BOOL microphone = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio] == AVAuthorizationStatusAuthorized;
+    if (accessibility && inputMonitoring && microphone) {
+        return [NSString stringWithFormat:@"Dictation ready — hold %@", @(self.hotkey->label)];
+    }
+    return @"Dictation: grant access in System Settings";
+}
+
+- (void)menuNeedsUpdate:(NSMenu *)menu {
+    [menu removeAllItems];
+
+    NSMenuItem *status = [[NSMenuItem alloc] initWithTitle:[self statusLineTitle]
+                                                    action:nil keyEquivalent:@""];
+    status.enabled = NO;
+    [menu addItem:status];
+    [menu addItem:NSMenuItem.separatorItem];
+
+    NSMenuItem *open = [[NSMenuItem alloc] initWithTitle:@"Open Qwen Scribe"
+                                                  action:@selector(openInterface:) keyEquivalent:@""];
+    open.target = self;
+    [menu addItem:open];
+
+    NSMenuItem *hotkeyRoot = [[NSMenuItem alloc] initWithTitle:@"Push-to-Talk Key"
+                                                        action:nil keyEquivalent:@""];
+    NSMenu *hotkeyMenu = [[NSMenu alloc] init];
+    hotkeyMenu.autoenablesItems = NO;
+    for (size_t i = 0; i < sizeof(QSHotkeyTable) / sizeof(QSHotkeyTable[0]); i++) {
+        const QSHotkeySpec *spec = &QSHotkeyTable[i];
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@(spec->label)
+                                                      action:@selector(selectHotkey:) keyEquivalent:@""];
+        item.target = self;
+        item.representedObject = @(spec->identifier);
+        item.state = (spec == self.hotkey) ? NSControlStateValueOn : NSControlStateValueOff;
+        item.enabled = self.serverReachable;
+        [hotkeyMenu addItem:item];
+    }
+    hotkeyRoot.submenu = hotkeyMenu;
+    [menu addItem:hotkeyRoot];
+
+    [menu addItem:NSMenuItem.separatorItem];
+    NSMenuItem *restart = [[NSMenuItem alloc] initWithTitle:@"Restart Server"
+                                                     action:@selector(restartServer:) keyEquivalent:@""];
+    restart.target = self;
+    restart.enabled = !self.serverTransitionInProgress;
+    [menu addItem:restart];
+    NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"Quit Qwen Scribe"
+                                                  action:@selector(quitQwenScribe:) keyEquivalent:@"q"];
+    quit.target = self;
+    quit.enabled = !self.serverTransitionInProgress;
+    [menu addItem:quit];
+}
+
+- (void)openInterface:(id)sender {
+    [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:QSServerBase]];
+}
+
+- (void)selectHotkey:(NSMenuItem *)sender {
+    NSString *identifier = sender.representedObject;
+    if ([identifier isKindOfClass:NSString.class]) {
+        [self pushDictationSetting:@"hotkey" value:identifier];
+    }
+}
+
+// ── Managed server control ────────────────────────────────────────────────
+
+/// The server's pid, but only when that pid still belongs to Qwen Scribe's
+/// own runtime — a recycled pid must never be signalled.
+- (pid_t)managedServerProcessIdentifier {
+    NSString *support = [NSHomeDirectory() stringByAppendingPathComponent:
+        @"Library/Application Support/Qwen Scribe"];
+    NSString *pidfile = [support stringByAppendingPathComponent:@"server.pid"];
+    NSString *contents = [NSString stringWithContentsOfFile:pidfile
+                                                   encoding:NSUTF8StringEncoding error:nil];
+    pid_t pid = (pid_t)contents.integerValue;
+    if (pid <= 0) return 0;
+    NSTask *ps = [[NSTask alloc] init];
+    ps.executableURL = [NSURL fileURLWithPath:@"/bin/ps"];
+    ps.arguments = @[@"-p", [NSString stringWithFormat:@"%d", pid], @"-o", @"command="];
+    NSPipe *pipe = NSPipe.pipe;
+    ps.standardOutput = pipe;
+    if (![ps launchAndReturnError:nil]) return 0;
+    [ps waitUntilExit];
+    NSString *command = [[NSString alloc] initWithData:[pipe.fileHandleForReading readDataToEndOfFile]
+                                              encoding:NSUTF8StringEncoding];
+    if (![command containsString:@"/Library/Application Support/Qwen Scribe/"]) return 0;
+    return pid;
+}
+
+- (void)stopManagedServerThen:(void (^)(void))completion {
+    pid_t pid = [self managedServerProcessIdentifier];
+    if (pid > 0) kill(pid, SIGTERM);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        for (int i = 0; i < 40 && pid > 0 && kill(pid, 0) == 0; i++) {
+            usleep(200000);   // up to 8 s for a graceful exit
+        }
+        if (pid > 0 && kill(pid, 0) == 0) {
+            // A wedged MLX decode ignores SIGTERM until its chunk finishes;
+            // mirror stop.sh and force the exit rather than hang the menu.
+            kill(pid, SIGKILL);
+            usleep(500000);
+        }
+        dispatch_async(dispatch_get_main_queue(), completion);
+    });
+}
+
+- (void)restartServer:(id)sender {
+    if (self.serverTransitionInProgress) return;
+    self.serverTransitionInProgress = YES;
+    self.serverReachable = NO;
+    __weak typeof(self) weakSelf = self;
+    [self stopManagedServerThen:^{
+        [weakSelf launchLocalServerOpeningBrowser:NO];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            weakSelf.serverTransitionInProgress = NO;
+            [weakSelf sendHeartbeat];
+        });
+    }];
+}
+
+- (void)quitQwenScribe:(id)sender {
+    if (self.serverTransitionInProgress) return;
+    self.serverTransitionInProgress = YES;
+    [self stopManagedServerThen:^{
+        [NSApp terminate:nil];
+    }];
 }
 
 - (void)reportFailure:(NSString *)message {

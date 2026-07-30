@@ -107,7 +107,7 @@ find_python() {
 }
 
 if server_up; then
-  open "$URL"
+  [ -z "${QS_NO_OPEN:-}" ] && open "$URL"
   exit 0
 fi
 
@@ -191,8 +191,8 @@ echo $! > "$PIDFILE"
 
 for _ in $(seq 1 60); do
   if server_up; then
-    open "$URL"
-    /usr/bin/osascript -e 'display notification "Ready — hold Right Command to dictate anywhere." with title "Qwen Scribe"' 2>/dev/null
+    [ -z "${QS_NO_OPEN:-}" ] && open "$URL"
+    /usr/bin/osascript -e 'display notification "Ready — hold your push-to-talk key to dictate anywhere." with title "Qwen Scribe"' 2>/dev/null
     exit 0
   fi
   sleep 1
