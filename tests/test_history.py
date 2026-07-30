@@ -108,6 +108,41 @@ class TranscriptHistoryTests(unittest.TestCase):
                 server._save_transcript(job, {"text": "hi"}, 100)
         self.assertEqual(list(server.TRANSCRIPTS_DIR.iterdir()), [])
 
+    def test_search_matches_filename_and_full_text_case_insensitively(self):
+        self.transcript("aaaaaaaaaaaa", 100, "Revenue forecast for Berlin")
+        self.transcript("bbbbbbbbbbbb", 200, "Daily sync notes")
+        client = local_client()
+
+        def ids(q):
+            return [t["id"] for t in client.get("/api/transcripts", params={"q": q}).json()["transcripts"]]
+
+        self.assertEqual(ids("BERLIN"), ["aaaaaaaaaaaa"])              # text, any case
+        self.assertEqual(ids("münchen"), ["bbbbbbbbbbbb", "aaaaaaaaaaaa"])  # filename
+        self.assertEqual(ids("berlin sync"), [])                        # AND across terms
+        self.assertEqual(ids("revenue berlin"), ["aaaaaaaaaaaa"])
+        self.assertEqual(ids(""), ["bbbbbbbbbbbb", "aaaaaaaaaaaa"])     # empty = all
+
+    def test_export_returns_zip_with_text_and_json(self):
+        import io
+        import zipfile
+
+        self.transcript("aaaaaaaaaaaa", 100, "First transcript")
+        self.transcript("bbbbbbbbbbbb", 200, "Second transcript")
+        (server.TRANSCRIPTS_DIR / "cccccccccccc.json").write_text("damaged{", encoding="utf-8")
+
+        response = local_client().get("/api/transcripts/export")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("attachment", response.headers["content-disposition"])
+        archive = zipfile.ZipFile(io.BytesIO(response.content))
+        names = archive.namelist()
+        self.assertIn("transcripts.json", names)
+        self.assertEqual(len([n for n in names if n.startswith("text/")]), 2)
+        text_member = [n for n in names if n.startswith("text/")][0]
+        self.assertIn("transcript", archive.read(text_member).decode("utf-8"))
+
+    def test_export_with_no_transcripts_is_a_404(self):
+        self.assertEqual(local_client().get("/api/transcripts/export").status_code, 404)
+
     def test_rejects_unsafe_transcript_id(self):
         for unsafe in ("../../secrets", "AAAAAAAAAAAA", "aaaaaaaaaaa", "aaaaaaaaaaaaa", ""):
             with self.assertRaises(HTTPException) as error:

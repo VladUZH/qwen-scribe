@@ -8,6 +8,7 @@ leaves your machine.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -16,6 +17,7 @@ import tempfile
 import threading
 import time
 import uuid
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -61,6 +63,17 @@ DEFAULT_MODEL = "1.7b"
 
 # Languages exposed in the UI. "auto" lets the model detect the language.
 LANGUAGES = ["auto", "English", "German", "Russian", "French", "Italian", "Spanish"]
+
+# Push-to-talk keys the native helper can watch. The ids must match the
+# key-code/modifier-mask table in native/DictationHelper.m. Only right-side
+# modifiers qualify: they have unambiguous device-dependent bits and macOS
+# never synthesizes them around other keys (Fn is synthesized around every
+# arrow/navigation key, so offering it would start dictation on PageUp).
+DICTATION_HOTKEYS = {
+    "right_command": "Right ⌘",
+    "right_option": "Right ⌥",
+    "right_control": "Right ⌃",
+}
 
 ALLOWED_SUFFIXES = {
     # audio
@@ -130,6 +143,80 @@ dictation_state: dict[str, object] = {
     "microphone": None,
 }
 dictation_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Settings (persisted; the native dictation helper polls and applies them)
+# ---------------------------------------------------------------------------
+
+SETTINGS_FILE = APP_DATA_DIR / "settings.json"
+settings_lock = threading.Lock()
+
+DEFAULT_SETTINGS = {
+    "dictation": {
+        "hotkey": "right_command",
+        "model": DEFAULT_MODEL,
+        "language": "auto",
+    },
+}
+
+_SETTING_VALIDATORS = {
+    "hotkey": DICTATION_HOTKEYS,
+    "model": MODELS,
+    "language": LANGUAGES,
+}
+
+
+def _validated_dictation(candidate: object, base: dict) -> dict:
+    """Merge candidate onto base, rejecting unknown keys and values."""
+    merged = dict(base)
+    if not isinstance(candidate, dict):
+        raise ValueError("'dictation' must be an object")
+    for key, value in candidate.items():
+        allowed = _SETTING_VALIDATORS.get(key)
+        if allowed is None:
+            raise ValueError(f"Unknown dictation setting '{key}'")
+        # The isinstance check matters: a list/dict value would raise
+        # TypeError (unhashable) from the membership test, not ValueError.
+        if not isinstance(value, str) or value not in allowed:
+            raise ValueError(f"Invalid value for '{key}': {value!r}")
+        merged[key] = value
+    return merged
+
+
+def _load_settings() -> dict:
+    """Read settings from disk, falling back field by field to the defaults."""
+    settings = {"dictation": dict(DEFAULT_SETTINGS["dictation"])}
+    try:
+        stored = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return settings
+    if isinstance(stored, dict) and isinstance(stored.get("dictation"), dict):
+        # Field by field: one hand-edited bad value must not take the server
+        # down or discard the other stored settings.
+        for key, value in stored["dictation"].items():
+            try:
+                settings["dictation"] = _validated_dictation(
+                    {key: value}, settings["dictation"]
+                )
+            except ValueError:
+                continue
+    return settings
+
+
+def _save_settings(settings: dict) -> None:
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = SETTINGS_FILE.with_suffix(".json.tmp")
+    try:
+        temporary_path.write_text(
+            json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        temporary_path.replace(SETTINGS_FILE)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
+
+
+_settings = _load_settings()
 
 # One worker: serialize GPU work so parallel uploads queue instead of thrash.
 executor = ThreadPoolExecutor(max_workers=1)
@@ -452,6 +539,45 @@ def config() -> dict:
     }
 
 
+def _settings_response() -> dict:
+    with settings_lock:
+        dictation = dict(_settings["dictation"])
+    return {
+        "dictation": dictation,
+        "options": {
+            "hotkeys": [
+                {"id": key, "label": label} for key, label in DICTATION_HOTKEYS.items()
+            ],
+            "models": list(MODELS.keys()),
+            "languages": LANGUAGES,
+        },
+    }
+
+
+@app.get("/api/settings")
+def get_settings() -> dict:
+    return _settings_response()
+
+
+@app.put("/api/settings")
+def update_settings(payload: dict) -> dict:
+    with settings_lock:
+        try:
+            merged = _validated_dictation(
+                payload.get("dictation", {}), _settings["dictation"]
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        # Persist first, then commit to memory: a failed write must not leave
+        # a live value the dictation helper applies but a restart forgets.
+        try:
+            _save_settings({"dictation": merged})
+        except OSError as exc:
+            raise HTTPException(500, f"Could not save settings: {exc}") from exc
+        _settings["dictation"] = merged
+    return _settings_response()
+
+
 @app.post("/api/jobs")
 async def create_job(
     file: UploadFile = File(...),
@@ -531,17 +657,88 @@ def get_job(job_id: str) -> dict:
 
 
 @app.get("/api/transcripts")
-def list_transcripts() -> dict:
+def list_transcripts(q: str = "") -> dict:
+    # Every term must appear in the filename or the full text (not just the
+    # 220-character preview), so "budget q3" finds the meeting either way.
+    terms = [term.lower() for term in q.split()] if q else []
     transcripts = []
     for path in TRANSCRIPTS_DIR.glob("*.json"):
         try:
-            transcripts.append(_transcript_summary(_read_transcript(path)))
+            transcript = _read_transcript(path)
+            summary = _transcript_summary(transcript)
         except Exception:
             # A damaged or partially copied file should not make the entire
             # history inaccessible.
             continue
+        if terms:
+            result = transcript.get("result")
+            text = result.get("text") if isinstance(result, dict) else ""
+            haystack = f"{summary['filename']} {text if isinstance(text, str) else ''}".lower()
+            if not all(term in haystack for term in terms):
+                continue
+        transcripts.append(summary)
     transcripts.sort(key=lambda item: item["finished_at"] or 0, reverse=True)
     return {"transcripts": transcripts}
+
+
+def _export_member_name(transcript: dict, used: set[str]) -> str:
+    """A readable, filesystem-safe member name that cannot collide."""
+    stem = re.sub(r"\.[A-Za-z0-9]+$", "", str(transcript.get("filename") or "Untitled"))
+    stem = re.sub(r"[^\w \-.]", "_", stem).strip() or "Untitled"
+    finished_at = _timestamp(transcript.get("finished_at"))
+    if finished_at is not None:
+        stamp = time.strftime("%Y-%m-%d %H.%M", time.localtime(finished_at))
+        name = f"{stamp} — {stem}"
+    else:
+        name = stem
+    if name in used:
+        name = f"{name} — {transcript.get('id')}"
+    # The inner id can itself collide (hand-copied files); numbering is total.
+    unique, counter = name, 2
+    while unique in used:
+        unique = f"{name} ({counter})"
+        counter += 1
+    used.add(unique)
+    return unique
+
+
+@app.get("/api/transcripts/export")
+def export_transcripts() -> Response:
+    """Every saved transcript as one zip: plain text plus the full JSON."""
+    entries = []
+    for path in TRANSCRIPTS_DIR.glob("*.json"):
+        try:
+            transcript = _read_transcript(path)
+        except Exception:
+            continue
+        if isinstance(transcript, dict):
+            entries.append(transcript)
+    if not entries:
+        raise HTTPException(404, "There are no saved transcripts to export")
+    entries.sort(key=lambda item: _timestamp(item.get("finished_at")) or 0)
+
+    buffer = io.BytesIO()
+    used_names: set[str] = set()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "transcripts.json",
+            json.dumps(entries, ensure_ascii=False, indent=2),
+        )
+        for transcript in entries:
+            result = transcript.get("result")
+            text = result.get("text") if isinstance(result, dict) else ""
+            member = _export_member_name(transcript, used_names)
+            archive.writestr(
+                f"text/{member}.txt",
+                text if isinstance(text, str) else "",
+            )
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="qwen-scribe-transcripts.zip"'
+        },
+    )
 
 
 @app.get("/api/transcripts/{transcript_id}")
@@ -606,14 +803,17 @@ def dictation_heartbeat(
 def dictation_status() -> dict:
     with dictation_lock:
         state = dict(dictation_state)
+    with settings_lock:
+        dictation = dict(_settings["dictation"])
     return {
         "available": bool(state["last_seen"] and time.time() - state["last_seen"] < 30),
         "accessibility": state["accessibility"],
         "input_monitoring": state["input_monitoring"],
         "microphone": state["microphone"],
-        "shortcut": "Right Command",
-        "model": "1.7b",
-        "language": "auto",
+        "hotkey": dictation["hotkey"],
+        "shortcut": DICTATION_HOTKEYS[dictation["hotkey"]],
+        "model": dictation["model"],
+        "language": dictation["language"],
     }
 
 
