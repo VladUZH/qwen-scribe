@@ -3,12 +3,22 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/scripts/release_versions.sh"
 DIST="${DIST_DIR:-$ROOT/dist}"
 VERSION="${VERSION:-0.2.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 IDENTITY="${CODESIGN_IDENTITY:--}"
 APP="$DIST/Qwen Scribe.app"
 STOP_APP="$DIST/Stop Qwen Scribe.app"
+
+if ! qs_valid_bundle_version "$VERSION"; then
+  echo "VERSION must be a three-part version such as 0.2.0 (got '$VERSION')." >&2
+  exit 1
+fi
+if [[ ! "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+  echo "BUILD_NUMBER must be a positive integer (got '$BUILD_NUMBER')." >&2
+  exit 1
+fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "The macOS app bundles must be built on macOS." >&2

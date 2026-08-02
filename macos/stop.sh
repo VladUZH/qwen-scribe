@@ -46,7 +46,9 @@ stop_known_process() {
 
 stopped=0
 stubborn=0
-for pidfile in "$PIDFILE" "$DICTATION_PIDFILE"; do
+# Stop the microphone/helper first. A wedged MLX server can take ten seconds to
+# die, and an explicit Stop request must not leave recording active meanwhile.
+for pidfile in "$DICTATION_PIDFILE" "$PIDFILE"; do
   stop_known_process "$pidfile"
   case "$?" in
     0) stopped=1 ;;

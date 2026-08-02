@@ -6,6 +6,32 @@ details when clearly documented.
 
 ## [Unreleased]
 
+### Fixed
+
+- Speculative decoding now reuses the cached 0.6B model instead of loading a
+  second copy into unified memory
+- Queued uploads are removed during shutdown, worker-submission failures clean
+  up immediately, and completed jobs are pruned as they finish
+- Long Chinese, Japanese, and Korean transcripts no longer gain spaces at
+  chunk boundaries; history search now handles Unicode case folding, and
+  invalid numeric dates no longer break the history API
+- Browser polling is single-flight, a newer upload cancels the older request,
+  and submissions wait for the server-owned language configuration
+- Quit and Stop requests end active microphone capture before waiting for the
+  model server; delayed paste retries now revalidate focus, modifiers, and the
+  clipboard before reporting success; the privacy prompt reflects the
+  configurable hotkey
+- Release tooling validates versions before destructive paths, preserves the
+  submitted archive until a notarized replacement is verified, and refuses to
+  overwrite already-published GitHub release assets
+
+### Changed
+
+- Speculative decoding is labeled experimental because the pinned upstream
+  implementation currently benchmarks slower than normal decoding
+- Documented that Japanese and Korean word timestamps need optional upstream
+  tokenizer dependencies that are not yet included in the runtime lock
+
 ## [0.2.0-beta.1] - 2026-07-30
 
 ### Added

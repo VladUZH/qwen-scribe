@@ -18,7 +18,11 @@ if [[ ! -f "$ARCHIVE" ]]; then
 fi
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+ARCHIVE_DIR="$(cd "$(dirname "$ARCHIVE")" && pwd)"
+ARCHIVE="$ARCHIVE_DIR/$(basename "$ARCHIVE")"
+REPACK_DIR="$(mktemp -d "$ARCHIVE_DIR/.qwen-scribe-repack.XXXXXX")"
+REPACKED="$REPACK_DIR/$(basename "$ARCHIVE")"
+trap 'rm -rf "$WORK" "$REPACK_DIR"' EXIT
 
 echo "Submitting $ARCHIVE for notarization (profile: $PROFILE)…"
 xcrun notarytool submit "$ARCHIVE" --keychain-profile "$PROFILE" --wait
@@ -33,12 +37,18 @@ fi
 xcrun stapler staple "$STAGE/Qwen Scribe.app"
 xcrun stapler staple "$STAGE/Stop Qwen Scribe.app"
 
-echo "Re-packing the stapled archive…"
-rm -f "$ARCHIVE"
-ditto -c -k --sequesterRsrc --keepParent "$STAGE" "$ARCHIVE"
-
-echo "Verifying…"
+echo "Verifying the stapled apps…"
+xcrun stapler validate "$STAGE/Qwen Scribe.app"
+xcrun stapler validate "$STAGE/Stop Qwen Scribe.app"
 spctl --assess --type execute --verbose "$STAGE/Qwen Scribe.app"
+spctl --assess --type execute --verbose "$STAGE/Stop Qwen Scribe.app"
+
+echo "Re-packing the stapled archive…"
+# Keep the submitted archive intact until its stapled replacement has been
+# created successfully on the same filesystem, then replace it atomically.
+ditto -c -k --sequesterRsrc --keepParent "$STAGE" "$REPACKED"
+/usr/bin/unzip -tq "$REPACKED"
+mv -f "$REPACKED" "$ARCHIVE"
 
 # Re-packing changed the archive's hash. Regenerate the checksum file here so
 # a stale published SHA256SUMS.txt can never make a legitimate stapled build

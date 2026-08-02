@@ -75,6 +75,11 @@ The 1.7B model needs roughly 3.4 GB of unified memory and the 0.6B model roughly
 1.2 GB, in addition to normal application overhead. Model weights are not
 included in this repository.
 
+Word timestamps for Japanese and Korean require the upstream `aligner` extra
+(`nagisa` and `soynlp`), which is not part of the reviewed runtime lock yet.
+Ordinary transcription in those languages is unaffected; leave timestamps off
+until that optional dependency set is deliberately added and reviewed.
+
 ## Build and run the Mac app
 
 From a downloaded or cloned source directory:
