@@ -1,3 +1,4 @@
+import json
 import tempfile
 import time
 import unittest
@@ -84,6 +85,24 @@ class TranscriptHistoryTests(unittest.TestCase):
             ("dddddddddddd.json", "truncated{"),
             ("eeeeeeeeeeee.json", '{"result": {"text": 5}}'),
             ("ffffffffffff.json", '{"result": {"text": "x"}, "finished_at": "soon"}'),
+            (
+                "111111111111.json",
+                '{"id": "111111111111", "result": {"text": "finite response"}, "finished_at": NaN}',
+            ),
+            (
+                "222222222222.json",
+                '{"id": "222222222222", "result": {"text": "bounded date"}, "finished_at": 1e300}',
+            ),
+            (
+                "333333333333.json",
+                '{"id": "333333333333", "result": {"text": "huge integer date"}, '
+                f'"finished_at": {"9" * 400}}}',
+            ),
+            (
+                "444444444444.json",
+                '{"id": "444444444444", "result": {"text": "overflowing exponent"}, '
+                '"finished_at": 1e999}',
+            ),
         ]:
             (server.TRANSCRIPTS_DIR / name).write_text(body, encoding="utf-8")
 
@@ -91,9 +110,45 @@ class TranscriptHistoryTests(unittest.TestCase):
         listed = {item["id"] for item in summaries}
         self.assertIn("aaaaaaaaaaaa", listed)
         # The two files that are objects degrade to empty text rather than 500.
-        self.assertEqual(len(summaries), 3)
+        self.assertEqual(len(summaries), 7)
         for item in summaries:
             self.assertIsInstance(item["word_count"], int)
+        # Invalid numeric timestamps must not make Starlette reject the whole
+        # otherwise-readable history response as non-JSON.
+        response = local_client().get("/api/transcripts")
+        self.assertEqual(response.status_code, 200)
+        invalid_ids = {
+            "111111111111",
+            "222222222222",
+            "333333333333",
+            "444444444444",
+        }
+        invalid_dates = {
+            item["id"]: item["finished_at"]
+            for item in response.json()["transcripts"]
+            if item["id"] in invalid_ids
+        }
+        self.assertEqual(
+            invalid_dates,
+            {
+                "111111111111": None,
+                "222222222222": None,
+                "333333333333": None,
+                "444444444444": None,
+            },
+        )
+
+        # The same damaged dates must not break bulk export or leak Python's
+        # non-standard NaN token into transcripts.json.
+        import io
+        import zipfile
+
+        export = local_client().get("/api/transcripts/export")
+        self.assertEqual(export.status_code, 200)
+        archive = zipfile.ZipFile(io.BytesIO(export.content))
+        exported_json = archive.read("transcripts.json").decode("utf-8")
+        self.assertNotIn("NaN", exported_json)
+        json.loads(exported_json, parse_constant=lambda value: self.fail(value))
 
     def test_delete_all_removes_orphaned_partial_writes(self):
         self.transcript("aaaaaaaaaaaa", 100, "One")
@@ -111,16 +166,23 @@ class TranscriptHistoryTests(unittest.TestCase):
     def test_search_matches_filename_and_full_text_case_insensitively(self):
         self.transcript("aaaaaaaaaaaa", 100, "Revenue forecast for Berlin")
         self.transcript("bbbbbbbbbbbb", 200, "Daily sync notes")
+        self.transcript("cccccccccccc", 300, "Straße update")
         client = local_client()
 
         def ids(q):
             return [t["id"] for t in client.get("/api/transcripts", params={"q": q}).json()["transcripts"]]
 
         self.assertEqual(ids("BERLIN"), ["aaaaaaaaaaaa"])              # text, any case
-        self.assertEqual(ids("münchen"), ["bbbbbbbbbbbb", "aaaaaaaaaaaa"])  # filename
+        self.assertEqual(
+            ids("münchen"),
+            ["cccccccccccc", "bbbbbbbbbbbb", "aaaaaaaaaaaa"],
+        )  # filename
         self.assertEqual(ids("berlin sync"), [])                        # AND across terms
         self.assertEqual(ids("revenue berlin"), ["aaaaaaaaaaaa"])
-        self.assertEqual(ids(""), ["bbbbbbbbbbbb", "aaaaaaaaaaaa"])     # empty = all
+        self.assertEqual(ids("STRASSE"), ["cccccccccccc"])             # Unicode casefold
+        self.assertEqual(
+            ids(""), ["cccccccccccc", "bbbbbbbbbbbb", "aaaaaaaaaaaa"]
+        )  # empty = all
 
     def test_export_returns_zip_with_text_and_json(self):
         import io
@@ -192,6 +254,32 @@ class TranscriptHistoryTests(unittest.TestCase):
             self.assertEqual(len(server.jobs), server.MAX_REMEMBERED_JOBS)
             # The most recent ones are the ones a browser might still poll.
             self.assertIn(f"{0:012x}", server.jobs)
+
+    def test_job_store_is_pruned_as_queued_jobs_finish(self):
+        now = time.time()
+        crowd = {
+            f"{index:012x}": {
+                "id": f"{index:012x}",
+                "status": "queued",
+                "created_at": now - index,
+            }
+            for index in range(server.MAX_REMEMBERED_JOBS + 25)
+        }
+        with mock.patch.dict(server.jobs, crowd, clear=True):
+            for job_id in list(crowd):
+                server._update(job_id, status="done")
+            self.assertEqual(len(server.jobs), server.MAX_REMEMBERED_JOBS)
+
+    def test_newly_failed_long_job_gets_a_full_retention_window(self):
+        old = time.time() - 10 * 60 * 60
+        with mock.patch.dict(
+            server.jobs,
+            {"aaaaaaaaaaaa": {"id": "a" * 12, "status": "processing", "created_at": old}},
+            clear=True,
+        ):
+            server._update("aaaaaaaaaaaa", status="error", detail="late failure")
+            self.assertIn("aaaaaaaaaaaa", server.jobs)
+            self.assertGreater(server.jobs["aaaaaaaaaaaa"]["finished_at"], old)
 
 
 class DictationStatusTests(unittest.TestCase):

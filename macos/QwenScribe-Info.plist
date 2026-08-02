@@ -27,6 +27,6 @@
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 Qwen Scribe contributors</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Qwen Scribe records audio while you hold the right Command key so it can transcribe and paste your dictation.</string>
+    <string>Qwen Scribe records audio while you hold your selected push-to-talk key so it can transcribe and paste your dictation.</string>
 </dict>
 </plist>

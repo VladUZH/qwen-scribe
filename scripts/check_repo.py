@@ -43,8 +43,9 @@ def main() -> int:
     files = source_files()
     relative = {str(path.relative_to(ROOT)) for path in files}
 
-    for required in sorted(REQUIRED - relative):
-        errors.append(f"missing required publication file: {required}")
+    for required in sorted(REQUIRED):
+        if required not in relative or not (ROOT / required).is_file():
+            errors.append(f"missing required publication file: {required}")
 
     for path in files:
         rel = path.relative_to(ROOT)
@@ -64,6 +65,7 @@ def main() -> int:
         ROOT / "scripts" / "setup_python.sh",
         ROOT / "scripts" / "build_macos_apps.sh",
         ROOT / "scripts" / "package_release.sh",
+        ROOT / "scripts" / "notarize.sh",
         ROOT / "macos" / "launcher.sh",
         ROOT / "macos" / "stop.sh",
     ):
