@@ -169,6 +169,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          PRERELEASE_ARGS=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            PRERELEASE_ARGS+=(--prerelease)
+          fi
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             # A re-run may refresh a draft, but published artifacts are
             # immutable: never replace a checksum users may already trust.
@@ -178,9 +182,10 @@ jobs:
             fi
             gh release upload "$GITHUB_REF_NAME" --clobber \
               dist/Qwen-Scribe-*.zip dist/SHA256SUMS.txt
-            gh release edit "$GITHUB_REF_NAME" --notes-file release-notes.md
+            gh release edit "$GITHUB_REF_NAME" "${PRERELEASE_ARGS[@]}" \
+              --notes-file release-notes.md
           else
-            gh release create "$GITHUB_REF_NAME" \
+            gh release create "$GITHUB_REF_NAME" "${PRERELEASE_ARGS[@]}" \
               --draft \
               --title "Qwen Scribe $GITHUB_REF_NAME" \
               --notes-file release-notes.md \
