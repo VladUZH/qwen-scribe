@@ -6,6 +6,8 @@ details when clearly documented.
 
 ## [Unreleased]
 
+## [0.2.1-beta.1] - 2026-08-02
+
 ### Fixed
 
 - Speculative decoding now reuses the cached 0.6B model instead of loading a
@@ -23,7 +25,10 @@ details when clearly documented.
   configurable hotkey
 - Release tooling validates versions before destructive paths, preserves the
   submitted archive until a notarized replacement is verified, and refuses to
-  overwrite already-published GitHub release assets
+  overwrite already-published GitHub release assets; beta tags now create
+  GitHub releases marked as pre-releases
+- Privacy and security documentation now reflects the configurable
+  push-to-talk key and the currently supported beta line
 
 ### Changed
 
@@ -133,6 +138,7 @@ with `make app`. Signed and notarized binaries are planned for v0.2.
   developer `.venv`
 - Model weights and generated app bundles are explicitly excluded from source
 
-[Unreleased]: https://github.com/VladUZH/qwen-scribe/compare/v0.2.0-beta.1...HEAD
+[Unreleased]: https://github.com/VladUZH/qwen-scribe/compare/v0.2.1-beta.1...HEAD
+[0.2.1-beta.1]: https://github.com/VladUZH/qwen-scribe/compare/v0.2.0-beta.1...v0.2.1-beta.1
 [0.2.0-beta.1]: https://github.com/VladUZH/qwen-scribe/compare/v0.1.0-beta.1...v0.2.0-beta.1
 [0.1.0-beta.1]: https://github.com/VladUZH/qwen-scribe/releases/tag/v0.1.0-beta.1

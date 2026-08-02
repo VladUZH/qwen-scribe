@@ -46,10 +46,10 @@ dictation can run without a network connection.
 
 Desktop dictation is optional and requests:
 
-- **Microphone:** records only while the right Command key is held.
+- **Microphone:** records only while the configured push-to-talk key is held.
 - **Input Monitoring:** the native helper subscribes to modifier-change events
-  and reacts only to key code 54 (right Command). It does not implement a text
-  key logger.
+  and reacts only to the configured right-side modifier key: Command, Option,
+  or Control. It does not implement a text key logger.
 - **Accessibility:** sends Command-V to the application that was focused when
   dictation began.
 
