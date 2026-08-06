@@ -173,6 +173,13 @@ _RESET_ON_RETRY = {
 }
 
 
+# Retry ids that have been claimed but not yet registered. Staging the copy
+# happens outside jobs_lock, so for its duration — the whole point of moving it
+# out, on a multi-gigabyte file — the new job is in neither place. Without this
+# a second Retry during the copy would find nothing to collide with.
+retries_staging: set[str] = set()
+
+
 class _JobCancelled(Exception):
     """Raised inside the worker when the user cancels a running job."""
 
@@ -480,6 +487,14 @@ def _prune_jobs_locked() -> None:
         if retained:
             Path(retained).unlink(missing_ok=True)
         jobs.pop(job_id, None)
+
+
+def _release_retry_claim(job_id: str, new_id: str) -> None:
+    """Undo a retry claim that never became a job. Caller must hold jobs_lock."""
+    retries_staging.discard(new_id)
+    source = jobs.get(job_id)
+    if source is not None and source.get("retried_as") == new_id:
+        source.pop("retried_as")
 
 
 def _forget_jobs(*job_ids: str) -> None:
@@ -1032,9 +1047,11 @@ def retry_job(job_id: str) -> JSONResponse:
             raise HTTPException(404, "Job not found")
         if source["status"] != "error":
             raise HTTPException(409, "Only a failed job can be retried")
-        if source.get("retried_as") in jobs:
+        pending = source.get("retried_as")
+        if pending is not None and (pending in jobs or pending in retries_staging):
             # One worker and one GPU: a double-clicked Retry would otherwise
-            # stage a second copy of the upload and transcribe it twice.
+            # stage a second copy of the upload and transcribe it twice. Once
+            # the retry is forgotten, this job may be retried afresh.
             raise HTTPException(409, "This job has already been retried")
         original = Path(source["path"])
         if not original.is_file():
@@ -1044,6 +1061,7 @@ def retry_job(job_id: str) -> JSONResponse:
         # Claim the retry before releasing the lock, so a second request that
         # arrives during the copy below is rejected rather than duplicated.
         source["retried_as"] = new_id
+        retries_staging.add(new_id)
         inherited = {key: value for key, value in source.items()
                      if key not in _RESET_ON_RETRY}
 
@@ -1058,9 +1076,7 @@ def retry_job(job_id: str) -> JSONResponse:
     except OSError as exc:
         destination.unlink(missing_ok=True)
         with jobs_lock:
-            stale = jobs.get(job_id)
-            if stale is not None and stale.get("retried_as") == new_id:
-                stale.pop("retried_as")
+            _release_retry_claim(job_id, new_id)
         raise HTTPException(500, f"Could not stage the file for a retry: {exc}") from exc
 
     submit_error: BaseException | None = None
@@ -1086,10 +1102,12 @@ def retry_job(job_id: str) -> JSONResponse:
             job_futures[new_id] = future
         except BaseException as exc:
             jobs.pop(new_id, None)
-            stale = jobs.get(job_id)
-            if stale is not None and stale.get("retried_as") == new_id:
-                stale.pop("retried_as")
+            _release_retry_claim(job_id, new_id)
             submit_error = exc
+        else:
+            # Registered in `jobs` now, which is what the next Retry collides
+            # with; the claim has done its job.
+            retries_staging.discard(new_id)
 
     if submit_error is not None:
         destination.unlink(missing_ok=True)

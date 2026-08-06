@@ -554,6 +554,43 @@ class QueueControlTests(WorkerTestCase):
         self.assertEqual(self.submit.call_count, 1)
         self.assertEqual(server.jobs[job_id]["retried_as"], first.json()["id"])
 
+    def test_a_second_retry_during_the_staging_copy_is_rejected(self):
+        """The copy runs outside the lock, so the claim has to span it.
+
+        This is the window a double click actually lands in: on a large file
+        it is the whole length of the copy, not the microsecond a check of
+        the registered jobs would cover.
+        """
+        copying = threading.Event()
+        finish_copy = threading.Event()
+        second = {}
+
+        def slow_copy(source, destination):
+            Path(destination).write_bytes(Path(source).read_bytes())
+            copying.set()
+            finish_copy.wait(timeout=5)
+
+        job_id = self.stage_job(status="error")
+
+        def retry_during_the_copy():
+            # Its own client: the two requests are genuinely concurrent.
+            client = TestClient(server.app, base_url=BASE_URL)
+            copying.wait(timeout=5)
+            second["status"] = client.post(f"/api/jobs/{job_id}/retry").status_code
+            finish_copy.set()
+
+        helper = threading.Thread(target=retry_during_the_copy)
+        helper.start()
+        self.addCleanup(finish_copy.set)
+        with mock.patch.object(server.shutil, "copyfile", slow_copy):
+            first = self.client.post(f"/api/jobs/{job_id}/retry")
+        helper.join(timeout=5)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.get("status"), 409)
+        self.assertEqual(self.submit.call_count, 1)
+        self.assertEqual(server.retries_staging, set())
+
     def test_a_retry_that_cannot_be_staged_leaves_the_job_retryable(self):
         """A full disk must not consume the one retry the job had."""
         job_id = self.stage_job(status="error")
