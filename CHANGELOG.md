@@ -6,6 +6,13 @@ details when clearly documented.
 
 ## [Unreleased]
 
+### Fixed
+
+- Word timestamps and SRT export now work for Japanese and Korean audio. The
+  forced aligner needs the `nagisa` and `soynlp` tokenizers for those two
+  languages; they were never installed, and the error told users to run a
+  `pip install` that could not reach the app's own private environment
+
 ## [0.2.0-beta.1] - 2026-07-30
 
 ### Added
