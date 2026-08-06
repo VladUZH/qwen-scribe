@@ -28,6 +28,23 @@ class SettingsTests(unittest.TestCase):
         self.addCleanup(lambda: server._settings.update(copy.deepcopy(original)))
         server._settings["dictation"] = dict(server.DEFAULT_SETTINGS["dictation"])
 
+    def test_languages_cover_every_model_language(self):
+        """The picker must not hide a language the model can actually do.
+
+        The expected set is mlx_qwen3_asr.tokenizer.known_language_names().
+        It is spelled out rather than imported because CI runs without MLX;
+        re-run that call after a model upgrade to confirm it still matches.
+        """
+        self.assertEqual(server.LANGUAGES[0], "auto")
+        self.assertEqual(
+            sorted(server.LANGUAGES[1:]),
+            [
+                "Arabic", "Chinese", "Dutch", "English", "French", "German",
+                "Hindi", "Italian", "Japanese", "Korean", "Portuguese",
+                "Russian", "Spanish", "Turkish",
+            ],
+        )
+
     def test_defaults_and_options(self):
         body = self.client.get("/api/settings").json()
         self.assertEqual(body["dictation"], server.DEFAULT_SETTINGS["dictation"])

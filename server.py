@@ -61,8 +61,15 @@ MODELS = {
 }
 DEFAULT_MODEL = "1.7b"
 
-# Languages exposed in the UI. "auto" lets the model detect the language.
-LANGUAGES = ["auto", "English", "German", "Russian", "French", "Italian", "Spanish"]
+# Every language Qwen3-ASR supports, so the picker never hides one that works
+# — mlx_qwen3_asr.tokenizer.known_language_names(). "auto" lets the model
+# detect it. Word timestamps for Japanese and Korean need the tokenizers from
+# the `aligner` extra, which requirements-lock.txt pins.
+LANGUAGES = [
+    "auto", "Arabic", "Chinese", "Dutch", "English", "French", "German",
+    "Hindi", "Italian", "Japanese", "Korean", "Portuguese", "Russian",
+    "Spanish", "Turkish",
+]
 
 # Push-to-talk keys the native helper can watch. The ids must match the
 # key-code/modifier-mask table in native/DictationHelper.m. Only right-side

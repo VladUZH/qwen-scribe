@@ -6,6 +6,12 @@ details when clearly documented.
 
 ## [Unreleased]
 
+### Added
+
+- All fourteen languages Qwen3-ASR supports are now selectable — Arabic,
+  Chinese, Dutch, Hindi, Japanese, Korean, Portuguese, and Turkish join the
+  six that were already listed
+
 ### Fixed
 
 - Word timestamps and SRT export now work for Japanese and Korean audio. The
