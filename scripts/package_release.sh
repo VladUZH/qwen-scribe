@@ -3,7 +3,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DIST="$ROOT/dist"
+source "$ROOT/scripts/release_versions.sh"
+DIST="${DIST_DIR:-$ROOT/dist}"
 
 if [[ ! -d "$DIST/Qwen Scribe.app" || ! -d "$DIST/Stop Qwen Scribe.app" ]]; then
   echo "Run make app first." >&2
@@ -17,6 +18,14 @@ fi
 BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
   "$DIST/Qwen Scribe.app/Contents/Info.plist")"
 RELEASE_TAG="${RELEASE_TAG:-$BUNDLE_VERSION}"
+if ! qs_valid_bundle_version "$BUNDLE_VERSION"; then
+  echo "The built bundle has an invalid version: '$BUNDLE_VERSION'." >&2
+  exit 1
+fi
+if ! qs_valid_release_version "$RELEASE_TAG"; then
+  echo "RELEASE_TAG must be a version such as 0.2.0 or 0.2.0-beta.1 (got '$RELEASE_TAG')." >&2
+  exit 1
+fi
 if [[ "$RELEASE_TAG" != "$BUNDLE_VERSION" && "$RELEASE_TAG" != "$BUNDLE_VERSION-"* ]]; then
   echo "RELEASE_TAG '$RELEASE_TAG' does not match the built bundle's version $BUNDLE_VERSION." >&2
   exit 1

@@ -10,15 +10,18 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import re
 import shutil
 import tempfile
 import threading
 import time
+import unicodedata
 import uuid
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
+from collections import Counter
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -70,6 +73,15 @@ LANGUAGES = [
     "Hindi", "Italian", "Japanese", "Korean", "Portuguese", "Russian",
     "Spanish", "Turkish",
 ]
+
+# mlx-qwen3-asr deliberately joins these languages without adding whitespace
+# between independently decoded chunks. Keep this in sync with its public
+# CJK language aliases so a long auto-detected transcript is not altered at
+# every 30-second boundary.
+UNSPACED_LANGUAGE_ALIASES = {
+    "chinese", "zh", "zh-cn", "zh-tw", "cantonese", "yue",
+    "japanese", "ja", "jp", "korean", "ko", "kr",
+}
 
 # Push-to-talk keys the native helper can watch. The ids must match the
 # key-code/modifier-mask table in native/DictationHelper.m. Only right-side
@@ -144,15 +156,12 @@ def get_session(model_key: str):
 # ---------------------------------------------------------------------------
 
 jobs: dict[str, dict] = {}
+job_futures: dict[str, Future] = {}
 jobs_lock = threading.Lock()
 
 # Never sent to the browser: the staged upload path, and a threading.Event
 # that is not JSON-serialisable anyway.
 _PRIVATE_JOB_FIELDS = {"path", "cancelled"}
-
-# Terminal states. A job in one of these is safe to evict and cannot be
-# cancelled; only "error" and "cancelled" can be retried.
-_FINISHED_STATUSES = {"done", "error", "cancelled"}
 
 # Per-run fields a retry must not inherit from the job it repeats. Everything
 # else — the filename, model, language, timestamps, turbo, vocabulary — is
@@ -311,6 +320,9 @@ stopping = threading.Event()
 # result; the transcript itself lives in TRANSCRIPTS_DIR.
 JOB_RETENTION_SECONDS = 60 * 60
 MAX_REMEMBERED_JOBS = 50
+# A job in one of these is settled: safe to evict, no longer cancellable, and
+# never resurrected by a worker returning from an in-flight model call.
+TERMINAL_JOB_STATUSES = {"done", "error", "cancelled"}
 
 
 def _transcript_path(transcript_id: str) -> Path:
@@ -353,15 +365,36 @@ def _save_transcript(job: dict, result: dict, finished_at: float) -> None:
         raise
 
 
+def _finite_json_float(value: str) -> float | None:
+    parsed = float(value)
+    return parsed if math.isfinite(parsed) else None
+
+
 def _read_transcript(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+    # Python accepts JavaScript's NaN/Infinity tokens even though JSON does
+    # not, and a huge exponent silently becomes infinity. Treat both forms as
+    # damaged null values so APIs and exports remain strict JSON.
+    return json.loads(
+        path.read_text(encoding="utf-8"),
+        parse_constant=lambda _value: None,
+        parse_float=_finite_json_float,
+    )
 
 
 def _timestamp(value: object) -> float | None:
     """Return value as a float only if it really is a number."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    try:
+        timestamp = float(value)
+    except (OverflowError, ValueError):
+        return None
+    # Python's JSON decoder accepts NaN/Infinity, but Starlette intentionally
+    # refuses to serialize them. Bounds also keep hand-edited dates within the
+    # range supported by Python/JavaScript date formatting (years 1..9999).
+    if not math.isfinite(timestamp) or not -62_135_596_800 <= timestamp <= 253_402_300_799:
+        return None
+    return timestamp
 
 
 def _transcript_summary(transcript: dict) -> dict:
@@ -396,8 +429,32 @@ def _transcript_summary(transcript: dict) -> dict:
 
 def _update(job_id: str, **fields) -> None:
     with jobs_lock:
-        if job_id in jobs:
-            jobs[job_id].update(fields)
+        job = jobs.get(job_id)
+        # Shutdown and normal completion are terminal ownership decisions. A
+        # worker returning from an in-flight model call must never resurrect a
+        # job that shutdown already marked as failed.
+        if job is None or job.get("status") in TERMINAL_JOB_STATUSES:
+            return
+        if fields.get("status") in TERMINAL_JOB_STATUSES:
+            fields.setdefault("finished_at", time.time())
+        job.update(fields)
+        if fields.get("status") in TERMINAL_JOB_STATUSES:
+            _prune_jobs_locked()
+
+
+def _forget_future(job_id: str) -> None:
+    with jobs_lock:
+        job_futures.pop(job_id, None)
+
+
+def _join_transcript_texts(texts: list[str], language: str | None) -> str:
+    normalized = (language or "").strip().lower()
+    return ("" if normalized in UNSPACED_LANGUAGE_ALIASES else " ").join(texts)
+
+
+def _searchable(value: str) -> str:
+    """Normalize text for user-facing, Unicode-aware transcript search."""
+    return unicodedata.normalize("NFKC", value).casefold()
 
 
 def _prune_jobs_locked() -> None:
@@ -411,7 +468,7 @@ def _prune_jobs_locked() -> None:
     finished = [
         (job.get("finished_at") or job.get("created_at") or 0.0, job_id)
         for job_id, job in jobs.items()
-        if job.get("status") in _FINISHED_STATUSES
+        if job.get("status") in TERMINAL_JOB_STATUSES
     ]
     evict = {job_id for stamp, job_id in finished if now - stamp > JOB_RETENTION_SECONDS}
     surviving = sorted((item for item in finished if item[1] not in evict), reverse=True)
@@ -429,7 +486,7 @@ def _forget_jobs(*job_ids: str) -> None:
     """Drop finished jobs whose transcript the user just deleted."""
     with jobs_lock:
         for job_id in job_ids:
-            if jobs.get(job_id, {}).get("status") in _FINISHED_STATUSES:
+            if jobs.get(job_id, {}).get("status") in TERMINAL_JOB_STATUSES:
                 del jobs[job_id]
 
 
@@ -447,6 +504,8 @@ def _run_job(job_id: str) -> None:
         return
 
     try:
+        if stopping.is_set():
+            raise RuntimeError("Server stopped before this job started")
         _update(job_id, status="loading", detail="Loading model (first run downloads weights)")
         session = get_session(job["model"])
 
@@ -455,8 +514,10 @@ def _run_job(job_id: str) -> None:
         draft_model = None
         if job["turbo"] and job["model"] == "1.7b":
             _update(job_id, detail="Loading 0.6B draft model for speculative decoding")
-            get_session("0.6b")  # ensure weights are downloaded/cached
-            draft_model = MODELS["0.6b"]
+            # Pass the Session-owned model itself. Passing its string id makes
+            # mlx-qwen3-asr load a second independent 0.6B copy into its global
+            # model holder, wasting roughly another 1.2 GB of unified memory.
+            draft_model = get_session("0.6b").model
 
         _update(job_id, detail="Decoding audio")
         from mlx_qwen3_asr.audio import load_audio_np
@@ -478,7 +539,7 @@ def _run_job(job_id: str) -> None:
             kwargs["language"] = job["language"]
         if job["context"]:
             kwargs["context"] = job["context"]
-        if draft_model:
+        if draft_model is not None:
             kwargs["draft_model"] = draft_model
 
         texts: list[str] = []
@@ -511,6 +572,13 @@ def _run_job(job_id: str) -> None:
                 segments.clear()
                 _update(job_id, timestamps_unavailable=timestamps_unavailable)
                 result = session.transcribe(chunk_audio, **kwargs)
+            # The model call itself cannot be interrupted. Recheck immediately
+            # afterwards so its final chunk cannot complete a job after a stop
+            # or a cancel.
+            if cancelled.is_set():
+                raise _JobCancelled
+            if stopping.is_set():
+                raise RuntimeError("Server stopped before this job finished")
             if result.text:
                 texts.append(result.text.strip())
             if result.language:
@@ -529,13 +597,18 @@ def _run_job(job_id: str) -> None:
                 job_id,
                 progress=processed_sec / total_sec if total_sec else 1.0,
                 detail=f"Chunk {i + 1}/{len(chunks)} · {processed_sec/60:.1f}/{total_sec/60:.1f} min",
-                partial=" ".join(texts),
+                partial=_join_transcript_texts(
+                    texts,
+                    Counter(languages).most_common(1)[0][0] if languages else None,
+                ),
             )
 
-        language = max(set(languages), key=languages.count) if languages else None
+        # Counter preserves first-seen order for ties; the previous set-based
+        # expression could report a different language between processes.
+        language = Counter(languages).most_common(1)[0][0] if languages else None
         finished_at = time.time()
         result = {
-            "text": " ".join(texts),
+            "text": _join_transcript_texts(texts, language),
             "language": language,
             # word-level [{text,start,end}]
             "segments": None if timestamps_unavailable else (segments or None),
@@ -548,36 +621,55 @@ def _run_job(job_id: str) -> None:
             "started_at": started_at,
             "timestamps_unavailable": timestamps_unavailable,
         }
-        try:
-            _save_transcript(completed_job, result, finished_at)
-        except Exception as exc:
-            # Never discard a successful transcription merely because its
-            # history file could not be written. The UI surfaces this warning.
-            history_saved = False
-            history_error = f"Could not save transcript: {type(exc).__name__}: {exc}"
+        # Serialize the final durable write with shutdown. Whichever acquires
+        # jobs_lock first owns the outcome: either this transcript is fully
+        # saved and marked done, or shutdown marks it error and no file appears.
+        with jobs_lock:
+            current = jobs.get(job_id)
+            if (
+                stopping.is_set()
+                or current is None
+                or current.get("status") in TERMINAL_JOB_STATUSES
+            ):
+                raise RuntimeError("Server stopped before this job finished")
+            try:
+                _save_transcript(completed_job, result, finished_at)
+            except Exception as exc:
+                # Never discard a successful transcription merely because its
+                # history file could not be written. The UI surfaces this warning.
+                history_saved = False
+                history_error = f"Could not save transcript: {type(exc).__name__}: {exc}"
+            current.update(
+                status="done",
+                progress=1.0,
+                detail="Done",
+                partial=None,
+                finished_at=finished_at,
+                result=result,
+                history_saved=history_saved,
+                history_error=history_error,
+                timestamps_unavailable=timestamps_unavailable,
+            )
+            _prune_jobs_locked()
+    except _JobCancelled:
+        _update(job_id, status="cancelled", detail="Cancelled", partial=None)
+    except Exception as exc:  # surface the real cause to the UI
         _update(
             job_id,
-            status="done",
-            progress=1.0,
-            detail="Done",
-            partial=None,
-            finished_at=finished_at,
-            result=result,
-            history_saved=history_saved,
-            history_error=history_error,
-            timestamps_unavailable=timestamps_unavailable,
+            status="error",
+            detail=f"{type(exc).__name__}: {exc}",
+            finished_at=time.time(),
         )
-    except _JobCancelled:
-        _update(job_id, status="cancelled", detail="Cancelled", partial=None,
-                finished_at=time.time())
-    except Exception as exc:  # surface the real cause to the UI
-        _update(job_id, status="error", detail=f"{type(exc).__name__}: {exc}",
-                finished_at=time.time())
     finally:
-        # A failed job keeps its upload so "Retry" does not need a re-upload.
-        # _prune_jobs_locked deletes it when the job is finally forgotten.
+        # A job that failed on its own keeps its upload so "Retry" does not
+        # need a re-upload; _prune_jobs_locked deletes it when the job is
+        # finally forgotten. A shutdown is not a retryable failure, and must
+        # leave nothing staged behind.
         with jobs_lock:
-            retry_pending = jobs.get(job_id, {}).get("status") == "error"
+            retry_pending = (
+                not stopping.is_set()
+                and jobs.get(job_id, {}).get("status") == "error"
+            )
         if not retry_pending:
             path.unlink(missing_ok=True)
 
@@ -592,12 +684,34 @@ async def lifespan(app: FastAPI):
     yield
     # Without this, Python's atexit handler joins the worker thread and
     # silently runs every queued job to completion before the process exits.
-    stopping.set()
-    executor.shutdown(wait=False, cancel_futures=True)
+    # Mark unfinished jobs while holding the same lock used for the final
+    # transcript write. That makes shutdown and successful persistence a
+    # single, deterministic ownership decision.
     with jobs_lock:
+        stopping.set()
+        finished_at = time.time()
         for job in jobs.values():
             if job.get("status") in {"queued", "loading", "processing"}:
-                job.update(status="error", detail="Server stopped before this job finished")
+                job.update(
+                    status="error",
+                    detail="Server stopped before this job finished",
+                    finished_at=finished_at,
+                )
+        # executor.shutdown(cancel_futures=True) cancels work that never
+        # entered _run_job, so its finally block cannot remove those staged
+        # uploads. Snapshot them for explicit cancellation and cleanup.
+        pending = [
+            (future, Path(jobs[job_id]["path"]))
+            for job_id, future in job_futures.items()
+            if job_id in jobs and jobs[job_id].get("path")
+        ]
+    for future, path in pending:
+        if future.cancel():
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    executor.shutdown(wait=False, cancel_futures=True)
 
 
 app = FastAPI(title="Qwen Scribe", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -745,6 +859,12 @@ async def create_job(
                  "(brew install ffmpeg) or MacPorts (sudo port install ffmpeg)."
         )
 
+    # Starlette already knows the size of a fully parsed UploadFile. Avoid a
+    # second multi-gigabyte copy when that value is over the application limit;
+    # the streaming counter remains authoritative when size is unavailable.
+    if file.size is not None and file.size > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, OVERSIZE_DETAIL)
+
     job_id = uuid.uuid4().hex[:12]
     dest = UPLOAD_DIR / f"{job_id}{suffix}"
 
@@ -762,6 +882,8 @@ async def create_job(
         dest.unlink(missing_ok=True)
         raise
 
+    submit_error: BaseException | None = None
+    future: Future | None = None
     with jobs_lock:
         _prune_jobs_locked()
         jobs[job_id] = {
@@ -782,8 +904,23 @@ async def create_job(
             "created_at": time.time(),
             "result": None,
         }
+        # Holding jobs_lock prevents a very fast worker from finishing before
+        # its Future is registered for shutdown cleanup.
+        try:
+            future = executor.submit(_run_job, job_id)
+            job_futures[job_id] = future
+        except BaseException as exc:
+            jobs.pop(job_id, None)
+            submit_error = exc
 
-    executor.submit(_run_job, job_id)
+    if submit_error is not None:
+        dest.unlink(missing_ok=True)
+        if isinstance(submit_error, RuntimeError):
+            raise HTTPException(503, "The transcription worker is stopping") from submit_error
+        raise submit_error
+
+    assert future is not None
+    future.add_done_callback(lambda _future: _forget_future(job_id))
     return JSONResponse({"id": job_id})
 
 
@@ -817,7 +954,7 @@ def cancel_job(job_id: str) -> dict:
         job = jobs.get(job_id)
         if job is None:
             raise HTTPException(404, "Job not found")
-        if job["status"] in _FINISHED_STATUSES:
+        if job["status"] in TERMINAL_JOB_STATUSES:
             raise HTTPException(409, f"This job already finished ({job['status']})")
         job["cancelled"].set()
         # A queued job is never picked up, so settle it here rather than wait
@@ -836,6 +973,8 @@ def retry_job(job_id: str) -> JSONResponse:
     and its upload is deleted immediately rather than kept on the chance of a
     retry — this app does not hoard audio the user has already abandoned.
     """
+    submit_error: BaseException | None = None
+    future: Future | None = None
     with jobs_lock:
         source = jobs.get(job_id)
         if source is None:
@@ -867,7 +1006,23 @@ def retry_job(job_id: str) -> JSONResponse:
             "cancelled": threading.Event(),
             "created_at": time.time(),
         }
-    executor.submit(_run_job, new_id)
+        # Same ordering as create_job: register the Future under the lock so
+        # shutdown cleanup cannot miss a worker that starts immediately.
+        try:
+            future = executor.submit(_run_job, new_id)
+            job_futures[new_id] = future
+        except BaseException as exc:
+            jobs.pop(new_id, None)
+            submit_error = exc
+
+    if submit_error is not None:
+        destination.unlink(missing_ok=True)
+        if isinstance(submit_error, RuntimeError):
+            raise HTTPException(503, "The transcription worker is stopping") from submit_error
+        raise submit_error
+
+    assert future is not None
+    future.add_done_callback(lambda _future: _forget_future(new_id))
     return JSONResponse({"id": new_id})
 
 
@@ -875,7 +1030,7 @@ def retry_job(job_id: str) -> JSONResponse:
 def list_transcripts(q: str = "") -> dict:
     # Every term must appear in the filename or the full text (not just the
     # 220-character preview), so "budget q3" finds the meeting either way.
-    terms = [term.lower() for term in q.split()] if q else []
+    terms = [_searchable(term) for term in q.split()] if q else []
     transcripts = []
     for path in TRANSCRIPTS_DIR.glob("*.json"):
         try:
@@ -888,7 +1043,9 @@ def list_transcripts(q: str = "") -> dict:
         if terms:
             result = transcript.get("result")
             text = result.get("text") if isinstance(result, dict) else ""
-            haystack = f"{summary['filename']} {text if isinstance(text, str) else ''}".lower()
+            haystack = _searchable(
+                f"{summary['filename']} {text if isinstance(text, str) else ''}"
+            )
             if not all(term in haystack for term in terms):
                 continue
         transcripts.append(summary)
@@ -937,7 +1094,7 @@ def export_transcripts() -> Response:
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(
             "transcripts.json",
-            json.dumps(entries, ensure_ascii=False, indent=2),
+            json.dumps(entries, ensure_ascii=False, indent=2, allow_nan=False),
         )
         for transcript in entries:
             result = transcript.get("result")

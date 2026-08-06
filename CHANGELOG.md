@@ -46,6 +46,36 @@ from someone who ran real video files through v0.2.1-beta.1.
 - A word-timestamp failure no longer destroys the transcription. The chunk is
   retried without timestamps, the finished text is kept and saved to history,
   and the transcript view explains why there is no `.srt`
+## [0.2.1-beta.1] - 2026-08-02
+
+### Fixed
+
+- Speculative decoding now reuses the cached 0.6B model instead of loading a
+  second copy into unified memory
+- Queued uploads are removed during shutdown, worker-submission failures clean
+  up immediately, and completed jobs are pruned as they finish
+- Long Chinese, Japanese, and Korean transcripts no longer gain spaces at
+  chunk boundaries; history search now handles Unicode case folding, and
+  invalid numeric dates no longer break the history API
+- Browser polling is single-flight, a newer upload cancels the older request,
+  and submissions wait for the server-owned language configuration
+- Quit and Stop requests end active microphone capture before waiting for the
+  model server; delayed paste retries now revalidate focus, modifiers, and the
+  clipboard before reporting success; the privacy prompt reflects the
+  configurable hotkey
+- Release tooling validates versions before destructive paths, preserves the
+  submitted archive until a notarized replacement is verified, and refuses to
+  overwrite already-published GitHub release assets; beta tags now create
+  GitHub releases marked as pre-releases
+- Privacy and security documentation now reflects the configurable
+  push-to-talk key and the currently supported beta line
+
+### Changed
+
+- Speculative decoding is labeled experimental because the pinned upstream
+  implementation currently benchmarks slower than normal decoding
+- Documented that Japanese and Korean word timestamps need optional upstream
+  tokenizer dependencies that are not yet included in the runtime lock
 
 ## [0.2.0-beta.1] - 2026-07-30
 
@@ -148,6 +178,8 @@ with `make app`. Signed and notarized binaries are planned for v0.2.
   developer `.venv`
 - Model weights and generated app bundles are explicitly excluded from source
 
-[Unreleased]: https://github.com/VladUZH/qwen-scribe/compare/v0.2.0-beta.1...HEAD
+[Unreleased]: https://github.com/VladUZH/qwen-scribe/compare/v0.2.2-beta.1...HEAD
+[0.2.2-beta.1]: https://github.com/VladUZH/qwen-scribe/compare/v0.2.1-beta.1...v0.2.2-beta.1
+[0.2.1-beta.1]: https://github.com/VladUZH/qwen-scribe/compare/v0.2.0-beta.1...v0.2.1-beta.1
 [0.2.0-beta.1]: https://github.com/VladUZH/qwen-scribe/compare/v0.1.0-beta.1...v0.2.0-beta.1
 [0.1.0-beta.1]: https://github.com/VladUZH/qwen-scribe/releases/tag/v0.1.0-beta.1

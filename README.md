@@ -20,13 +20,14 @@ Qwen Scribe transcribes audio and video with
 GPU. There is no account, API key, or Qwen Scribe cloud service. Audio and
 transcript text stay on the Mac.
 
-> **Project status:** `v0.2.0-beta.1`. Core transcription, history, and
+> **Project status:** `v0.2.1-beta.1`. Core transcription, history, and
 > dictation work. A downloadable beta build exists on the
-> [releases page](https://github.com/VladUZH/qwen-scribe/releases); it is
-> ad-hoc signed, so macOS blocks the first launch until you approve it under
-> **System Settings → Privacy & Security → Open Anyway** — building from
-> source with `make app` avoids that hoop. Developer ID-signed and notarized
-> binaries follow once credentials are configured
+> [releases page](https://github.com/VladUZH/qwen-scribe/releases), where its
+> provenance notes state the exact signing and notarization status. An ad-hoc
+> build is blocked on first launch until you approve it under **System Settings
+> → Privacy & Security → Open Anyway**; building from source with `make app`
+> avoids that hoop. Developer ID-signed and notarized binaries follow once
+> credentials are configured
 > ([RELEASING.md](RELEASING.md), [ROADMAP.md](ROADMAP.md)). Feedback and
 > careful testing are welcome.
 
@@ -74,6 +75,11 @@ transcript text stay on the Mac.
 The 1.7B model needs roughly 3.4 GB of unified memory and the 0.6B model roughly
 1.2 GB, in addition to normal application overhead. Model weights are not
 included in this repository.
+
+Word timestamps for Japanese and Korean require the upstream `aligner` extra
+(`nagisa` and `soynlp`), which is not part of the reviewed runtime lock yet.
+Ordinary transcription in those languages is unaffected; leave timestamps off
+until that optional dependency set is deliberately added and reviewed.
 
 ## Build and run the Mac app
 

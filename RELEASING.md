@@ -10,8 +10,8 @@ publishes them. Nothing becomes public from automation alone.
 2. Tag and push:
 
    ```bash
-   git tag v0.2.0-beta.1
-   git push origin v0.2.0-beta.1
+   git tag v0.2.1-beta.1
+   git push origin v0.2.1-beta.1
    ```
 
 3. The `Release` workflow builds the apps on a GitHub `macos-15` runner, runs
@@ -28,8 +28,8 @@ publishes them. Nothing becomes public from automation alone.
 5. Optionally sign and notarize (below), re-upload, and update the checksum.
 6. Publish the draft.
 
-Tag → version rules: the tag `v0.2.0-beta.1` names the archive; the app
-bundles inside carry `CFBundleShortVersionString` `0.2.0` (Apple's field does
+Tag → version rules: the tag `v0.2.1-beta.1` names the archive; the app
+bundles inside carry `CFBundleShortVersionString` `0.2.1` (Apple's field does
 not accept pre-release suffixes) and `CFBundleVersion` = the workflow run
 number. `scripts/package_release.sh` refuses a tag that does not match the
 bundle's version.

@@ -3,7 +3,7 @@
 ## Supported versions
 
 Until the first stable release, security fixes are made on the latest `main`
-branch and the newest `0.1.x` beta release only.
+branch and the newest published beta release only.
 
 ## Reporting a vulnerability
 

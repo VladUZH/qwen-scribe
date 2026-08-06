@@ -292,7 +292,7 @@
     </div>
     <div class="check" id="turboWrap">
       <input type="checkbox" id="turbo">
-      <label for="turbo">Turbo — speculative decoding (0.6B drafts, 1.7B verifies; same quality, uses more GPU)</label>
+      <label for="turbo">Experimental speculative decoding — currently slower in upstream benchmarks; same quality, uses more GPU</label>
     </div>
     <div class="field field-wide">
       <label for="context">Domain vocabulary <span style="text-transform:none;font-weight:400">(optional — space-separated terms, e.g. "EBITDA CapEx ESG")</span></label>
@@ -419,15 +419,19 @@
   let submissionSeq = 0;
   let pollFailures = 0;
   let allowedExtensions = null;
+  let uploadController = null;
 
   const stopPolling = () => {
-    if (pollTimer) clearInterval(pollTimer);
+    if (pollTimer) clearTimeout(pollTimer);
     pollTimer = null;
   };
 
-  // Held so loadSettings can wait for it: applying a stored language to an
-  // unpopulated <select> is a silent no-op.
-  const configReady = fetch("/api/config").then(r => r.json()).then(cfg => {
+  // Also awaited by loadSettings: applying a stored language to a <select>
+  // that has not been populated yet is a silent no-op.
+  const configReady = fetch("/api/config").then(r => {
+    if (!r.ok) throw new Error();
+    return r.json();
+  }).then(cfg => {
     const sel = $("language");
     cfg.languages.forEach(l => {
       const o = document.createElement("option");
@@ -452,6 +456,11 @@
       $("runtime").textContent = "ffmpeg missing — install it with Homebrew or MacPorts";
       $("runtime").style.color = "var(--err)";
     }
+    return true;
+  }).catch(() => {
+    $("runtime").textContent = "server configuration unavailable";
+    $("runtime").style.color = "var(--err)";
+    return false;
   });
 
   const drop = $("drop");
@@ -470,6 +479,8 @@
 
   async function submit(file) {
     const seq = ++submissionSeq;
+    if (uploadController) uploadController.abort();
+    uploadController = null;
     const extension = (file.name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
     currentFile = file;
     lastResult = null;
@@ -485,6 +496,12 @@
     stopPolling();
     pollFailures = 0;
 
+    // The language list starts empty and is owned by /api/config. A drop that
+    // beats that request must wait rather than submit an invalid blank value.
+    const configured = await configReady;
+    if (seq !== submissionSeq) return;
+    if (!configured) return fail("Could not load the server configuration. Is server.py still running?");
+
     if (allowedExtensions && !allowedExtensions.has(extension)) {
       return fail(`Unsupported file type “${extension || file.name}”. Supported: ${[...allowedExtensions].join(" ")}`);
     }
@@ -498,21 +515,35 @@
     form.append("context", $("context").value);
 
     let res;
+    const controller = new AbortController();
+    uploadController = controller;
     try {
-      res = await fetch("/api/jobs", { method: "POST", body: form });
+      res = await fetch("/api/jobs", { method: "POST", body: form, signal: controller.signal });
     } catch {
+      if (uploadController === controller) uploadController = null;
       if (seq === submissionSeq) fail("Server unreachable. Is server.py still running?");
       return;
     }
+    if (uploadController === controller) uploadController = null;
     if (seq !== submissionSeq) return;   // a newer upload already took over
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
+      if (seq !== submissionSeq) return;
       return fail(body.detail || `Upload failed (${res.status})`);
     }
     const { id } = await res.json();
     refreshQueue();
     if (seq !== submissionSeq) return;
-    pollTimer = setInterval(() => poll(id, seq), 800);
+    schedulePoll(id, seq);
+  }
+
+  function schedulePoll(id, seq) {
+    if (seq !== submissionSeq) return;
+    stopPolling();
+    pollTimer = setTimeout(() => {
+      pollTimer = null;
+      poll(id, seq);
+    }, 800);
   }
 
   // ── Queue ─────────────────────────────────────────────────────────────
@@ -597,10 +628,13 @@
 
   // Give up rather than hammer a server that is gone, but tolerate the brief
   // gap while it is still loading a model.
-  function pollFailed() {
+  function pollFailed(id, seq) {
+    if (seq !== submissionSeq) return;
     if (++pollFailures >= 5) {
       stopPolling();
       fail("Lost contact with the server. Is server.py still running?");
+    } else {
+      schedulePoll(id, seq);
     }
   }
 
@@ -610,16 +644,17 @@
     try {
       res = await fetch(`/api/jobs/${id}`);
     } catch {
-      return pollFailed();
+      return pollFailed(id, seq);
     }
     if (seq !== submissionSeq) return;
     if (res.status === 404) {
       stopPolling();
       return fail("The server no longer knows about this job — it was probably restarted. Please upload again.");
     }
-    if (!res.ok) return pollFailed();
+    if (!res.ok) return pollFailed(id, seq);
     const job = await res.json().catch(() => null);
-    if (!job || typeof job.status !== "string") return pollFailed();
+    if (seq !== submissionSeq) return;
+    if (!job || typeof job.status !== "string") return pollFailed(id, seq);
     pollFailures = 0;
 
     $("jobStatus").textContent = job.status;
@@ -634,6 +669,8 @@
         renderTranscriptBody();
         ["btnCopy","btnTxt","btnSrt"].forEach(b => $(b).hidden = true);
       }
+      schedulePoll(id, seq);
+      return;
     }
     if (job.status === "done") {
       stopPolling();
@@ -650,6 +687,7 @@
         timestampsUnavailable: job.timestamps_unavailable,
       });
       if (job.history_saved) loadHistory();
+      return;
     }
     if (job.status === "error") {
       stopPolling();

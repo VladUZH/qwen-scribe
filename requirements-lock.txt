@@ -1,4 +1,5 @@
-# Fully resolved runtime tested for v0.1.0-beta.1 on macOS arm64 / Python 3.13.
+# Fully resolved runtime for v0.2.1-beta.1. Release CI validates it on macOS
+# arm64 with Python 3.12.
 # Update intentionally after reviewing upstream release notes and running the
 # complete test/build workflow.
 annotated-doc==0.0.5
