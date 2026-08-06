@@ -249,6 +249,9 @@ def _save_transcript(job: dict, result: dict, finished_at: float) -> None:
         "model": job.get("model"),
         "language_requested": job.get("language"),
         "timestamps_requested": bool(job.get("timestamps")),
+        # Set when timestamps were asked for but the aligner could not produce
+        # them, so reopening the transcript still explains the missing .srt.
+        "timestamps_unavailable": job.get("timestamps_unavailable"),
         "turbo": bool(job.get("turbo")),
         "context": job.get("context") or "",
         "result": result,
@@ -388,12 +391,29 @@ def _run_job(job_id: str) -> None:
         languages: list[str] = []
         truncated = False
         processed_sec = 0.0
+        timestamps_unavailable: str | None = None
 
         # split_audio_into_chunks returns (waveform, offset_seconds) tuples.
         for i, (chunk_audio, chunk_offset) in enumerate(chunks):
             if stopping.is_set():
                 raise RuntimeError("Server stopped before this job finished")
-            result = session.transcribe(chunk_audio, **kwargs)
+            try:
+                result = session.transcribe(chunk_audio, **kwargs)
+            except Exception as exc:
+                # A word-timestamp backend failure — a missing CJK tokenizer, a
+                # bad aligner asset — must cost the timestamps, not the whole
+                # transcript. Retry this chunk without them and stay that way,
+                # so a two-hour file does not fail twice per chunk.
+                if not kwargs.get("return_timestamps"):
+                    raise
+                timestamps_unavailable = (
+                    f"Word timestamps are unavailable for this audio "
+                    f"({type(exc).__name__}: {exc}). The transcript itself is complete."
+                )
+                kwargs["return_timestamps"] = False
+                segments.clear()
+                _update(job_id, timestamps_unavailable=timestamps_unavailable)
+                result = session.transcribe(chunk_audio, **kwargs)
             if result.text:
                 texts.append(result.text.strip())
             if result.language:
@@ -420,12 +440,17 @@ def _run_job(job_id: str) -> None:
         result = {
             "text": " ".join(texts),
             "language": language,
-            "segments": segments or None,   # word-level [{text,start,end}]
+            # word-level [{text,start,end}]
+            "segments": None if timestamps_unavailable else (segments or None),
             "truncated": truncated,
         }
         history_saved = True
         history_error = None
-        completed_job = {**job, "started_at": started_at}
+        completed_job = {
+            **job,
+            "started_at": started_at,
+            "timestamps_unavailable": timestamps_unavailable,
+        }
         try:
             _save_transcript(completed_job, result, finished_at)
         except Exception as exc:
@@ -443,6 +468,7 @@ def _run_job(job_id: str) -> None:
             result=result,
             history_saved=history_saved,
             history_error=history_error,
+            timestamps_unavailable=timestamps_unavailable,
         )
     except Exception as exc:  # surface the real cause to the UI
         _update(job_id, status="error", detail=f"{type(exc).__name__}: {exc}")

@@ -541,6 +541,7 @@
         finishedAt: job.finished_at,
         historySaved: job.history_saved,
         historyError: job.history_error,
+        timestampsUnavailable: job.timestamps_unavailable,
       });
       if (job.history_saved) loadHistory();
     }
@@ -602,6 +603,7 @@
     if (details.historySaved !== false) notes.push("Saved automatically to transcript history.");
     if (details.historyError) notes.push(details.historyError);
     if (result.truncated) notes.push("One chunk hit its decode limit — very long noisy sections may be incomplete.");
+    if (details.timestampsUnavailable) notes.push(details.timestampsUnavailable);
     $("tNote").textContent = notes.join(" ");
     if (details.scroll !== false) {
       $("transcript").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -689,6 +691,7 @@
       filename: transcript.filename,
       finishedAt: transcript.finished_at,
       historySaved: true,
+      timestampsUnavailable: transcript.timestamps_unavailable,
     });
   }
 

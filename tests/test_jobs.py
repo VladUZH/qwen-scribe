@@ -4,7 +4,12 @@ No model is ever loaded: the worker is replaced with a double, so these tests
 run on any machine, with or without MLX.
 """
 
+import sys
+import tempfile
+import types
 import unittest
+import uuid
+from pathlib import Path
 from unittest import mock
 
 from fastapi.testclient import TestClient
@@ -13,6 +18,91 @@ import server
 
 BASE_URL = "http://127.0.0.1:8990"
 WAV = b"RIFF\x00\x00\x00\x00WAVEfmt "
+SAMPLE_RATE = 16000
+
+
+class FakeResult:
+    """The subset of an mlx_qwen3_asr result that _run_job reads."""
+
+    def __init__(self, text="hello", language="English", segments=None, truncated=False):
+        self.text = text
+        self.language = language
+        self.segments = segments
+        self.truncated = truncated
+
+
+class WorkerTestCase(unittest.TestCase):
+    """Base class that runs _run_job against a fake model and a fake decoder.
+
+    CI has no MLX, and even where it exists a real transcription would download
+    weights, so both the audio helpers and the session are replaced. The audio
+    helpers are imported inside _run_job, which means they have to be stubbed
+    in sys.modules rather than on an already-imported module object.
+    """
+
+    def setUp(self):
+        self.addCleanup(server.jobs.clear)
+        transcripts = tempfile.TemporaryDirectory()
+        self.addCleanup(transcripts.cleanup)
+        directory = mock.patch.object(server, "TRANSCRIPTS_DIR", Path(transcripts.name))
+        directory.start()
+        self.addCleanup(directory.stop)
+
+    def install_audio_stubs(self, chunks: int, seconds_per_chunk: float = 30.0):
+        samples = [0.0] * int(SAMPLE_RATE * seconds_per_chunk)
+        package = types.ModuleType("mlx_qwen3_asr")
+        audio = types.ModuleType("mlx_qwen3_asr.audio")
+        audio.load_audio_np = lambda path, sr=SAMPLE_RATE: samples * chunks
+        chunking = types.ModuleType("mlx_qwen3_asr.chunking")
+        chunking.split_audio_into_chunks = lambda waveform, sr, size: [
+            (samples, index * seconds_per_chunk) for index in range(chunks)
+        ]
+        package.audio = audio
+        package.chunking = chunking
+        modules = mock.patch.dict(
+            sys.modules,
+            {
+                "mlx_qwen3_asr": package,
+                "mlx_qwen3_asr.audio": audio,
+                "mlx_qwen3_asr.chunking": chunking,
+            },
+        )
+        modules.start()
+        self.addCleanup(modules.stop)
+
+    def stage_job(self, **overrides) -> str:
+        """Create a job record with a real staged upload file behind it."""
+        job_id = uuid.uuid4().hex[:12]
+        upload = server.UPLOAD_DIR / f"{job_id}.wav"
+        upload.write_bytes(WAV)
+        self.addCleanup(upload.unlink, True)
+        server.jobs[job_id] = {
+            "id": job_id,
+            "status": "queued",
+            "detail": "Queued",
+            "progress": 0.0,
+            "filename": "clip.wav",
+            "size": len(WAV),
+            "model": "1.7b",
+            "language": "auto",
+            "timestamps": False,
+            "turbo": False,
+            "partial": None,
+            "context": "",
+            "path": str(upload),
+            "created_at": 1.0,
+            "result": None,
+            **overrides,
+        }
+        return job_id
+
+    def run_worker(self, session, chunks=1, **overrides) -> dict:
+        """Run _run_job to completion against `session` and return the record."""
+        self.install_audio_stubs(chunks)
+        job_id = self.stage_job(**overrides)
+        with mock.patch.object(server, "get_session", return_value=session):
+            server._run_job(job_id)
+        return server.jobs[job_id]
 
 
 class JobUploadTests(unittest.TestCase):
@@ -103,6 +193,58 @@ class JobUploadTests(unittest.TestCase):
         self.assertNotIn("path", body)
         self.assertEqual(body["id"], job_id)
         (server.UPLOAD_DIR / f"{job_id}.wav").unlink()
+
+
+class TimestampFallbackTests(WorkerTestCase):
+    """A word-timestamp failure must cost the timestamps, never the transcript."""
+
+    def test_aligner_failure_keeps_text_and_drops_timestamps(self):
+        calls = []
+
+        class FlakyAlignerSession:
+            def transcribe(self, audio, **kwargs):
+                calls.append(kwargs.get("return_timestamps"))
+                if kwargs.get("return_timestamps"):
+                    raise RuntimeError(
+                        "Korean tokenization requires optional dependency `soynlp`. "
+                        'Install with: pip install "mlx-qwen3-asr[aligner]"'
+                    )
+                return FakeResult(text="안녕하세요", language="Korean")
+
+        job = self.run_worker(FlakyAlignerSession(), chunks=2, timestamps=True)
+
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(job["result"]["text"], "안녕하세요 안녕하세요")
+        self.assertIsNone(job["result"]["segments"])
+        self.assertIn("soynlp", job["timestamps_unavailable"])
+        # The failing chunk is retried without timestamps, and every later
+        # chunk skips them outright rather than failing again.
+        self.assertEqual(calls, [True, False, False])
+
+    def test_a_normal_job_reports_no_timestamp_problem(self):
+        class GoodSession:
+            def transcribe(self, audio, **kwargs):
+                return FakeResult(
+                    segments=[{"text": "hello", "start": 0.0, "end": 0.5}]
+                )
+
+        job = self.run_worker(GoodSession(), timestamps=True)
+
+        self.assertEqual(job["status"], "done")
+        self.assertIsNone(job["timestamps_unavailable"])
+        self.assertEqual(len(job["result"]["segments"]), 1)
+
+    def test_a_real_transcription_failure_still_fails_the_job(self):
+        """Only timestamp failures degrade; a decode failure must surface."""
+
+        class BrokenSession:
+            def transcribe(self, audio, **kwargs):
+                raise RuntimeError("Metal device lost")
+
+        job = self.run_worker(BrokenSession(), timestamps=False)
+
+        self.assertEqual(job["status"], "error")
+        self.assertIn("Metal device lost", job["detail"])
 
 
 class JobShutdownTests(unittest.TestCase):

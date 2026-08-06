@@ -12,6 +12,9 @@ details when clearly documented.
   forced aligner needs the `nagisa` and `soynlp` tokenizers for those two
   languages; they were never installed, and the error told users to run a
   `pip install` that could not reach the app's own private environment
+- A word-timestamp failure no longer destroys the transcription. The chunk is
+  retried without timestamps, the finished text is kept and saved to history,
+  and the transcript view explains why there is no `.srt`
 
 ## [0.2.0-beta.1] - 2026-07-30
 
