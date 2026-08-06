@@ -7,6 +7,7 @@ run on any machine, with or without MLX.
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 import uuid
@@ -52,6 +53,14 @@ class WorkerTestCase(unittest.TestCase):
         directory = mock.patch.object(server, "TRANSCRIPTS_DIR", Path(transcripts.name))
         directory.start()
         self.addCleanup(directory.stop)
+        # Stage uploads somewhere of our own. Writing into the shared UPLOAD_DIR
+        # would put this suite's files next to those of a server running on the
+        # same machine, where its startup sweep can see them.
+        uploads = tempfile.TemporaryDirectory()
+        self.addCleanup(uploads.cleanup)
+        upload_directory = mock.patch.object(server, "UPLOAD_DIR", Path(uploads.name))
+        upload_directory.start()
+        self.addCleanup(upload_directory.stop)
 
     def install_audio_stubs(self, chunks: int, seconds_per_chunk: float = 30.0):
         samples = [0.0] * int(SAMPLE_RATE * seconds_per_chunk)
@@ -96,7 +105,10 @@ class WorkerTestCase(unittest.TestCase):
             "context": "",
             "path": str(upload),
             "cancelled": threading.Event(),
-            "created_at": 1.0,
+            # A real job is created now, and the retention sweep goes by age:
+            # a fixed epoch timestamp would make every staged job instantly
+            # evictable and quietly change what the test under it exercises.
+            "created_at": time.time(),
             "result": None,
             **overrides,
         }
@@ -206,6 +218,23 @@ class JobUploadTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 413)
         self.assertEqual(self.leftover_uploads(), before)
+
+    def test_rejects_vocabulary_hints_longer_than_the_stored_limit(self):
+        """The hint is prepended to every chunk's prompt, so an unbounded one
+        is paid for on every chunk of a two-hour file."""
+        before = self.leftover_uploads()
+
+        response = self.post(context="x" * (server.MAX_CONTEXT_CHARS + 1))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(str(server.MAX_CONTEXT_CHARS), response.json()["detail"])
+        self.assertEqual(self.leftover_uploads(), before)
+        self.submit.assert_not_called()
+
+    def test_accepts_vocabulary_hints_up_to_the_limit(self):
+        response = self.post(context="x" * server.MAX_CONTEXT_CHARS)
+        self.assertEqual(response.status_code, 200)
+        (server.UPLOAD_DIR / f"{response.json()['id']}.wav").unlink()
 
     def test_unknown_job_is_a_404(self):
         self.assertEqual(self.client.get("/api/jobs/deadbeefdead").status_code, 404)
@@ -354,6 +383,49 @@ class TimestampFallbackTests(WorkerTestCase):
         self.assertEqual(job["status"], "error")
         self.assertIn("Metal device lost", job["detail"])
 
+    def test_a_failure_that_survives_dropping_timestamps_fails_the_job(self):
+        """A dead decoder is not the aligner's fault.
+
+        Retrying without timestamps is how the two are told apart: if that
+        retry fails too, the timestamps were never the problem, and reporting
+        one would end the job promising a complete transcript it never made.
+        """
+
+        class DeadSession:
+            def transcribe(self, audio, **kwargs):
+                raise RuntimeError("Metal device lost")
+
+        job = self.run_worker(DeadSession(), timestamps=True)
+
+        self.assertEqual(job["status"], "error")
+        self.assertIn("Metal device lost", job["detail"])
+        self.assertIsNone(job.get("timestamps_unavailable"))
+
+    def test_a_later_chunk_failure_discards_the_earlier_timestamps(self):
+        """Half a file's word timestamps are worse than none.
+
+        The .srt would end at the last aligned chunk with nothing saying so.
+        """
+        aligned = []
+
+        class LateFailureSession:
+            def transcribe(inner, audio, **kwargs):
+                if not kwargs.get("return_timestamps"):
+                    return FakeResult(text="second")
+                aligned.append(True)
+                if len(aligned) > 1:
+                    raise RuntimeError("aligner asset missing")
+                return FakeResult(
+                    text="first", segments=[{"text": "first", "start": 0.0, "end": 0.5}]
+                )
+
+        job = self.run_worker(LateFailureSession(), chunks=2, timestamps=True)
+
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(job["result"]["text"], "first second")
+        self.assertIsNone(job["result"]["segments"])
+        self.assertIn("aligner asset missing", job["timestamps_unavailable"])
+
 
 class QueueControlTests(WorkerTestCase):
     """Listing, cancelling, and retrying — the queue the UI now renders."""
@@ -444,6 +516,127 @@ class QueueControlTests(WorkerTestCase):
         self.assertTrue(Path(retried["path"]).exists())
         self.addCleanup(Path(retried["path"]).unlink, True)
         self.submit.assert_called_once_with(server._run_job, body["id"])
+
+    def test_retry_stages_its_copy_without_holding_the_job_lock(self):
+        """The upload can be 4 GB, and every job API waits on that one lock.
+
+        Copying under it freezes the running job's progress, the queue view,
+        new uploads, and shutdown for the length of the disk copy.
+        """
+        lock_was_free = []
+
+        def watchful_copy(source, destination):
+            # A plain Lock is not reentrant, so this reports the truth even
+            # when the endpoint runs on this very thread.
+            acquired = server.jobs_lock.acquire(blocking=False)
+            lock_was_free.append(acquired)
+            if acquired:
+                server.jobs_lock.release()
+            Path(destination).write_bytes(Path(source).read_bytes())
+
+        job_id = self.stage_job(status="error")
+        with mock.patch.object(server.shutil, "copyfile", watchful_copy):
+            response = self.client.post(f"/api/jobs/{job_id}/retry")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(lock_was_free, [True])
+
+    def test_retrying_twice_does_not_queue_the_same_file_twice(self):
+        """One worker, one GPU: a double click must not transcribe it twice."""
+        job_id = self.stage_job(status="error")
+        first = self.client.post(f"/api/jobs/{job_id}/retry")
+        self.assertEqual(first.status_code, 200)
+
+        second = self.client.post(f"/api/jobs/{job_id}/retry")
+
+        self.assertEqual(second.status_code, 409)
+        self.assertIn("already", second.json()["detail"].lower())
+        self.assertEqual(self.submit.call_count, 1)
+        self.assertEqual(server.jobs[job_id]["retried_as"], first.json()["id"])
+
+    def test_a_retry_that_cannot_be_staged_leaves_the_job_retryable(self):
+        """A full disk must not consume the one retry the job had."""
+        job_id = self.stage_job(status="error")
+        before = sorted(server.UPLOAD_DIR.iterdir())
+
+        with mock.patch.object(
+            server.shutil, "copyfile", side_effect=OSError("No space left on device")
+        ):
+            failed = self.client.post(f"/api/jobs/{job_id}/retry")
+
+        self.assertEqual(failed.status_code, 500)
+        self.assertIn("No space left", failed.json()["detail"])
+        self.assertIsNone(server.jobs[job_id].get("retried_as"))
+        self.assertEqual(sorted(server.UPLOAD_DIR.iterdir()), before)
+        self.assertEqual(self.client.post(f"/api/jobs/{job_id}/retry").status_code, 200)
+
+    def test_a_retry_does_not_inherit_the_failure_it_repeats(self):
+        job_id = self.stage_job(
+            status="error",
+            detail="RuntimeError: Metal device lost",
+            timestamps_unavailable="Word timestamps are unavailable",
+            cancel_requested=True,
+        )
+
+        retried = server.jobs[self.client.post(f"/api/jobs/{job_id}/retry").json()["id"]]
+
+        self.assertEqual(retried["detail"], "Queued")
+        self.assertIsNone(retried.get("timestamps_unavailable"))
+        self.assertIsNone(retried.get("retried_as"))
+        self.assertFalse(retried.get("cancel_requested"))
+        self.assertFalse(retried["cancelled"].is_set())
+
+    def test_cancelling_a_running_job_says_so_while_the_chunk_finishes(self):
+        """The model call cannot be interrupted, so "cancelled" would be a lie
+        until the current chunk returns. Say what is actually happening."""
+        job_id = self.stage_job(status="processing", detail="Chunk 2/40")
+
+        body = self.client.post(f"/api/jobs/{job_id}/cancel").json()
+
+        self.assertEqual(body["status"], "cancelling")
+        self.assertTrue(server.jobs[job_id]["cancel_requested"])
+        self.assertTrue(server.jobs[job_id]["cancelled"].is_set())
+        # Still processing: only the worker may declare it finished.
+        self.assertEqual(server.jobs[job_id]["status"], "processing")
+        self.assertIn("Cancelling", server.jobs[job_id]["detail"])
+
+    def test_a_cancel_that_lands_before_the_final_save_is_honoured(self):
+        """The last chunk must not complete a job the user already stopped."""
+        job_id = None
+        real_join = server._join_transcript_texts
+
+        class GoodSession:
+            def transcribe(inner, audio, **kwargs):
+                return FakeResult()
+
+        def cancel_then_join(texts, language):
+            # Fires after the loop's last cancellation check, in the window
+            # between the final chunk and the durable write.
+            server.jobs[job_id]["cancelled"].set()
+            return real_join(texts, language)
+
+        self.install_audio_stubs(chunks=1)
+        job_id = self.stage_job()
+        with mock.patch.object(server, "get_session", return_value=GoodSession()), \
+                mock.patch.object(
+                    server, "_join_transcript_texts", side_effect=cancel_then_join
+                ):
+            server._run_job(job_id)
+
+        job = server.jobs[job_id]
+        self.assertEqual(job["status"], "cancelled")
+        self.assertIsNone(job["result"])
+        self.assertEqual(list(server.TRANSCRIPTS_DIR.glob("*.json")), [])
+        self.assertFalse(Path(job["path"]).exists())
+
+    def test_the_worker_ignores_a_job_that_was_already_forgotten(self):
+        """Cancelling while queued makes a job terminal, so the 50-job cap can
+        evict it before the single worker ever reaches it."""
+        self.install_audio_stubs(chunks=1)
+        job_id = self.stage_job()
+        server.jobs.pop(job_id)
+
+        server._run_job(job_id)   # must not raise
 
     def test_retry_is_rejected_for_a_running_job(self):
         job_id = self.stage_job(status="processing")

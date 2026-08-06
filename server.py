@@ -168,8 +168,8 @@ _PRIVATE_JOB_FIELDS = {"path", "cancelled"}
 # exactly what the user chose the first time and is carried over.
 _RESET_ON_RETRY = {
     "id", "status", "detail", "progress", "partial", "result", "path",
-    "cancelled", "created_at", "started_at", "finished_at",
-    "timestamps_unavailable", "history_saved", "history_error",
+    "cancelled", "cancel_requested", "retried_as", "created_at", "started_at",
+    "finished_at", "timestamps_unavailable", "history_saved", "history_error",
 }
 
 
@@ -492,21 +492,28 @@ def _forget_jobs(*job_ids: str) -> None:
 
 def _run_job(job_id: str) -> None:
     with jobs_lock:
-        job = dict(jobs[job_id])
+        source = jobs.get(job_id)
+        # Cancelling settles a queued job immediately, which makes it terminal
+        # and so evictable by the remembered-job cap before the single worker
+        # ever reaches it. Its upload is already gone with it.
+        if source is None:
+            return
+        job = dict(source)
 
     path = Path(job["path"])
     cancelled = job["cancelled"]
-    if cancelled.is_set():
-        # Cancelled while it sat in the queue: never load a model for it.
-        _update(job_id, status="cancelled", detail="Cancelled", progress=0.0,
-                finished_at=time.time())
-        path.unlink(missing_ok=True)
-        return
 
     try:
+        if cancelled.is_set():
+            # Cancelled while it sat in the queue: never load a model for it.
+            raise _JobCancelled
         if stopping.is_set():
             raise RuntimeError("Server stopped before this job started")
         _update(job_id, status="loading", detail="Loading model (first run downloads weights)")
+        # Loading can download several gigabytes of weights. A cancel that
+        # arrived while this job was still queued must not pay for that.
+        if cancelled.is_set():
+            raise _JobCancelled
         session = get_session(job["model"])
 
         # Speculative decoding: the 0.6B model drafts tokens, the 1.7B verifies
@@ -560,18 +567,32 @@ def _run_job(job_id: str) -> None:
             except Exception as exc:
                 # A word-timestamp backend failure — a missing CJK tokenizer, a
                 # bad aligner asset — must cost the timestamps, not the whole
-                # transcript. Retry this chunk without them and stay that way,
-                # so a two-hour file does not fail twice per chunk.
+                # transcript. Retrying the chunk without them is also how a
+                # timestamp failure is told apart from a dead decoder: only a
+                # retry that succeeds proves the aligner was the problem.
                 if not kwargs.get("return_timestamps"):
                     raise
+                if cancelled.is_set():
+                    raise _JobCancelled from exc
+                if stopping.is_set():
+                    raise RuntimeError("Server stopped before this job finished") from exc
+                try:
+                    result = session.transcribe(
+                        chunk_audio, **{**kwargs, "return_timestamps": False}
+                    )
+                except Exception:
+                    raise exc
+                # Stay timestamp-free for the rest of the file, so a two-hour
+                # recording does not fail twice per chunk. Timestamps already
+                # collected go too: half an .srt ends mid-recording with
+                # nothing on screen saying where it stopped.
+                kwargs["return_timestamps"] = False
+                segments.clear()
                 timestamps_unavailable = (
                     f"Word timestamps are unavailable for this audio "
                     f"({type(exc).__name__}: {exc}). The transcript itself is complete."
                 )
-                kwargs["return_timestamps"] = False
-                segments.clear()
                 _update(job_id, timestamps_unavailable=timestamps_unavailable)
-                result = session.transcribe(chunk_audio, **kwargs)
             # The model call itself cannot be interrupted. Recheck immediately
             # afterwards so its final chunk cannot complete a job after a stop
             # or a cancel.
@@ -626,6 +647,11 @@ def _run_job(job_id: str) -> None:
         # saved and marked done, or shutdown marks it error and no file appears.
         with jobs_lock:
             current = jobs.get(job_id)
+            # A cancel that arrived after the last chunk's check is still a
+            # cancel: without this the API has already answered "cancelling"
+            # and the job would go on to save itself to history as done.
+            if cancelled.is_set():
+                raise _JobCancelled
             if (
                 stopping.is_set()
                 or current is None
@@ -652,14 +678,22 @@ def _run_job(job_id: str) -> None:
             )
             _prune_jobs_locked()
     except _JobCancelled:
-        _update(job_id, status="cancelled", detail="Cancelled", partial=None)
+        _update(job_id, status="cancelled", detail="Cancelled", partial=None,
+                finished_at=time.time())
     except Exception as exc:  # surface the real cause to the UI
-        _update(
-            job_id,
-            status="error",
-            detail=f"{type(exc).__name__}: {exc}",
-            finished_at=time.time(),
-        )
+        # A job the user stopped is cancelled even when the interruption
+        # surfaced as an error: reporting a failure they caused, and keeping
+        # the upload staged for a retry they never asked for, is just noise.
+        if cancelled.is_set():
+            _update(job_id, status="cancelled", detail="Cancelled", partial=None,
+                    finished_at=time.time())
+        else:
+            _update(
+                job_id,
+                status="error",
+                detail=f"{type(exc).__name__}: {exc}",
+                finished_at=time.time(),
+            )
     finally:
         # A job that failed on its own keeps its upload so "Retry" does not
         # need a re-upload; _prune_jobs_locked deletes it when the job is
@@ -846,6 +880,16 @@ async def create_job(
     if language not in LANGUAGES:
         raise HTTPException(400, f"Unsupported language '{language}'")
 
+    # The hint is prepended to every chunk's prompt, so its cost is paid once
+    # per chunk for the whole file. Same limit as the stored setting.
+    context = context.strip()
+    if len(context) > MAX_CONTEXT_CHARS:
+        raise HTTPException(
+            400,
+            f"Vocabulary hints are limited to {MAX_CONTEXT_CHARS} characters "
+            f"(received {len(context)})",
+        )
+
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
         raise HTTPException(
@@ -898,7 +942,7 @@ async def create_job(
             "timestamps": bool(timestamps),
             "turbo": bool(turbo),
             "partial": None,
-            "context": context.strip(),
+            "context": context,
             "path": str(dest),
             "cancelled": threading.Event(),
             "created_at": time.time(),
@@ -962,7 +1006,15 @@ def cancel_job(job_id: str) -> dict:
         if job["status"] == "queued":
             job.update(status="cancelled", detail="Cancelled", finished_at=time.time())
             Path(job["path"]).unlink(missing_ok=True)
-    return {"id": job_id, "status": "cancelled"}
+            return {"id": job_id, "status": "cancelled"}
+        # A running job is a different answer. The model call cannot be
+        # interrupted, so the worker only notices at the next chunk boundary —
+        # minutes away on a long file. Saying "cancelled" while the job is
+        # visibly still processing reads as a bug; say what is really true and
+        # let the queue show it.
+        job.update(cancel_requested=True,
+                   detail="Cancelling — finishing the current chunk")
+    return {"id": job_id, "status": "cancelling"}
 
 
 @app.post("/api/jobs/{job_id}/retry")
@@ -973,29 +1025,50 @@ def retry_job(job_id: str) -> JSONResponse:
     and its upload is deleted immediately rather than kept on the chance of a
     retry — this app does not hoard audio the user has already abandoned.
     """
-    submit_error: BaseException | None = None
-    future: Future | None = None
+    new_id = uuid.uuid4().hex[:12]
     with jobs_lock:
         source = jobs.get(job_id)
         if source is None:
             raise HTTPException(404, "Job not found")
         if source["status"] != "error":
             raise HTTPException(409, "Only a failed job can be retried")
+        if source.get("retried_as") in jobs:
+            # One worker and one GPU: a double-clicked Retry would otherwise
+            # stage a second copy of the upload and transcribe it twice.
+            raise HTTPException(409, "This job has already been retried")
         original = Path(source["path"])
         if not original.is_file():
             raise HTTPException(
                 404, "The uploaded file is no longer available — upload it again"
             )
+        # Claim the retry before releasing the lock, so a second request that
+        # arrives during the copy below is rejected rather than duplicated.
+        source["retried_as"] = new_id
+        inherited = {key: value for key, value in source.items()
+                     if key not in _RESET_ON_RETRY}
 
-        new_id = uuid.uuid4().hex[:12]
-        destination = UPLOAD_DIR / f"{new_id}{original.suffix}"
-        # Copied rather than moved: the original job stays retryable until it
-        # is evicted, so a retry that fails immediately can be retried again.
-        shutil.copy2(original, destination)
+    destination = UPLOAD_DIR / f"{new_id}{original.suffix}"
+    try:
+        # Deliberately outside jobs_lock: the upload can be 4 GB, and the
+        # running job's progress, the queue view, new uploads, and shutdown all
+        # wait on that lock. copyfile rather than copy2 so the staged copy gets
+        # its own mtime — inheriting the original's would expose it to the
+        # startup sweep that deletes uploads older than a day.
+        shutil.copyfile(original, destination)
+    except OSError as exc:
+        destination.unlink(missing_ok=True)
+        with jobs_lock:
+            stale = jobs.get(job_id)
+            if stale is not None and stale.get("retried_as") == new_id:
+                stale.pop("retried_as")
+        raise HTTPException(500, f"Could not stage the file for a retry: {exc}") from exc
+
+    submit_error: BaseException | None = None
+    future: Future | None = None
+    with jobs_lock:
         _prune_jobs_locked()
         jobs[new_id] = {
-            **{key: value for key, value in source.items()
-               if key not in _RESET_ON_RETRY},
+            **inherited,
             "id": new_id,
             "status": "queued",
             "detail": "Queued",
@@ -1013,6 +1086,9 @@ def retry_job(job_id: str) -> JSONResponse:
             job_futures[new_id] = future
         except BaseException as exc:
             jobs.pop(new_id, None)
+            stale = jobs.get(job_id)
+            if stale is not None and stale.get("retried_as") == new_id:
+                stale.pop("retried_as")
             submit_error = exc
 
     if submit_error is not None:
