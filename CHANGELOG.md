@@ -23,6 +23,15 @@ details when clearly documented.
   Chinese, Dutch, Hindi, Japanese, Korean, Portuguese, and Turkish join the
   six that were already listed
 
+### Changed
+
+- The 4 GB per-file cap is now stated on the drop zone and in the README, and
+  the error explains that it protects against a staged upload needing twice
+  the file's size in free disk space rather than being a model limit
+- The web interface now says that Qwen Scribe is a menu-bar app, and that Open,
+  Restart Server, and Quit live there — a tester reported being unable to find
+  any way to quit or restart it
+
 ### Fixed
 
 - Word timestamps and SRT export now work for Japanese and Korean audio. The

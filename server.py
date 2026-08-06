@@ -94,7 +94,13 @@ ALLOWED_SUFFIXES = {
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB
 # Multipart boundaries and part headers add a little to the declared body size.
 MULTIPART_OVERHEAD_BYTES = 1024 * 1024
-OVERSIZE_DETAIL = "File exceeds the 4 GB upload limit"
+OVERSIZE_DETAIL = (
+    "File exceeds the 4 GB upload limit. The file is copied to a temporary "
+    "folder before transcription, so the cap keeps one job from needing twice "
+    "its size in free disk space. It is not a model limit: extract the audio "
+    "track and transcribe that instead — "
+    "ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 output.wav"
+)
 
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "qwen-scribe-uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)

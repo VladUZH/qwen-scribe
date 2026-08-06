@@ -108,6 +108,21 @@ Then open <http://127.0.0.1:8990>. The first transcription downloads the
 selected model once. Subsequent use works offline once dependencies and weights
 are cached.
 
+## Limits and controls
+
+Qwen Scribe is a **menu-bar app plus a local web interface**. The waveform icon
+at the right of the menu bar carries Open, Restart Server, and Quit; the browser
+page at <http://127.0.0.1:8990> is the interface for file transcription,
+history, and settings. Closing the browser tab does not stop anything — quit
+from the menu bar (or with `Stop Qwen Scribe.app`). Desktop dictation needs no
+browser tab open at all.
+
+| | |
+| --- | --- |
+| Maximum file size | **4 GB.** The upload is staged in a temporary folder before decoding, so one job briefly needs twice the file's size in free disk space. This is not a model limit — for a longer video, extract the audio track first: `ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 output.wav` |
+| Concurrency | One file at a time. Further uploads queue; the Queue list shows the order, and each entry can be cancelled, a failed one retried without re-uploading |
+| Languages | Automatic detection, or any of the fourteen Qwen3-ASR supports. Word timestamps for Japanese and Korean use the tokenizers shipped in `requirements-lock.txt`; if the aligner cannot run, the transcript is still produced and saved, without the `.srt` |
+
 ## Desktop dictation permissions
 
 Desktop dictation starts with the Mac app. On first launch, allow Qwen Scribe in
