@@ -64,8 +64,15 @@ MODELS = {
 }
 DEFAULT_MODEL = "1.7b"
 
-# Languages exposed in the UI. "auto" lets the model detect the language.
-LANGUAGES = ["auto", "English", "German", "Russian", "French", "Italian", "Spanish"]
+# Every language Qwen3-ASR supports, so the picker never hides one that works
+# — mlx_qwen3_asr.tokenizer.known_language_names(). "auto" lets the model
+# detect it. Word timestamps for Japanese and Korean need the tokenizers from
+# the `aligner` extra, which requirements-lock.txt pins.
+LANGUAGES = [
+    "auto", "Arabic", "Chinese", "Dutch", "English", "French", "German",
+    "Hindi", "Italian", "Japanese", "Korean", "Portuguese", "Russian",
+    "Spanish", "Turkish",
+]
 
 # mlx-qwen3-asr deliberately joins these languages without adding whitespace
 # between independently decoded chunks. Keep this in sync with its public
@@ -99,7 +106,13 @@ ALLOWED_SUFFIXES = {
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB
 # Multipart boundaries and part headers add a little to the declared body size.
 MULTIPART_OVERHEAD_BYTES = 1024 * 1024
-OVERSIZE_DETAIL = "File exceeds the 4 GB upload limit"
+OVERSIZE_DETAIL = (
+    "File exceeds the 4 GB upload limit. The file is copied to a temporary "
+    "folder before transcription, so the cap keeps one job from needing twice "
+    "its size in free disk space. It is not a model limit: extract the audio "
+    "track and transcribe that instead — "
+    "ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 output.wav"
+)
 
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "qwen-scribe-uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -146,6 +159,27 @@ jobs: dict[str, dict] = {}
 job_futures: dict[str, Future] = {}
 jobs_lock = threading.Lock()
 
+# Never sent to the browser: the staged upload path, and a threading.Event
+# that is not JSON-serialisable anyway.
+_PRIVATE_JOB_FIELDS = {"path", "cancelled"}
+
+# Per-run fields a retry must not inherit from the job it repeats. Everything
+# else — the filename, model, language, timestamps, turbo, vocabulary — is
+# exactly what the user chose the first time and is carried over.
+_RESET_ON_RETRY = {
+    "id", "status", "detail", "progress", "partial", "result", "path",
+    "cancelled", "created_at", "started_at", "finished_at",
+    "timestamps_unavailable", "history_saved", "history_error",
+}
+
+
+class _JobCancelled(Exception):
+    """Raised inside the worker when the user cancels a running job."""
+
+
+def _public_job(job: dict) -> dict:
+    return {key: value for key, value in job.items() if key not in _PRIVATE_JOB_FIELDS}
+
 # Updated by the optional native macOS helper. The web UI uses this to show
 # whether right-Command desktop dictation is running and which macOS permission
 # still needs attention.
@@ -165,32 +199,71 @@ SETTINGS_FILE = APP_DATA_DIR / "settings.json"
 settings_lock = threading.Lock()
 
 DEFAULT_SETTINGS = {
+    # Polled and applied by the native dictation helper.
     "dictation": {
         "hotkey": "right_command",
         "model": DEFAULT_MODEL,
         "language": "auto",
     },
+    # The file-transcription pane's choices. Kept on the server rather than in
+    # the browser so they survive a cleared cache and a different browser.
+    "transcription": {
+        "model": DEFAULT_MODEL,
+        "language": "auto",
+        "timestamps": False,
+        "turbo": False,
+        "context": "",
+        "sentence_per_line": False,
+    },
 }
 
-_SETTING_VALIDATORS = {
-    "hotkey": DICTATION_HOTKEYS,
-    "model": MODELS,
-    "language": LANGUAGES,
+MAX_CONTEXT_CHARS = 2000
+
+
+def _one_of(allowed):
+    # The isinstance check matters: a list/dict value would raise TypeError
+    # (unhashable) from the membership test, not ValueError.
+    return lambda value: isinstance(value, str) and value in allowed
+
+
+def _boolean(value) -> bool:
+    return isinstance(value, bool)
+
+
+def _short_text(value) -> bool:
+    return isinstance(value, str) and len(value) <= MAX_CONTEXT_CHARS
+
+
+# Per-section, per-key value validators. A key absent from its section's map
+# is rejected outright, so a typo can never be silently persisted.
+_SECTION_VALIDATORS = {
+    "dictation": {
+        "hotkey": _one_of(DICTATION_HOTKEYS),
+        "model": _one_of(MODELS),
+        "language": _one_of(LANGUAGES),
+    },
+    "transcription": {
+        "model": _one_of(MODELS),
+        "language": _one_of(LANGUAGES),
+        "timestamps": _boolean,
+        "turbo": _boolean,
+        "context": _short_text,
+        "sentence_per_line": _boolean,
+    },
 }
 
 
-def _validated_dictation(candidate: object, base: dict) -> dict:
+def _validated_section(section: str, candidate: object, base: dict) -> dict:
     """Merge candidate onto base, rejecting unknown keys and values."""
+    validators = _SECTION_VALIDATORS[section]
     merged = dict(base)
     if not isinstance(candidate, dict):
-        raise ValueError("'dictation' must be an object")
+        raise ValueError(f"'{section}' must be an object")
     for key, value in candidate.items():
-        allowed = _SETTING_VALIDATORS.get(key)
-        if allowed is None:
-            raise ValueError(f"Unknown dictation setting '{key}'")
-        # The isinstance check matters: a list/dict value would raise
-        # TypeError (unhashable) from the membership test, not ValueError.
-        if not isinstance(value, str) or value not in allowed:
+        check = validators.get(key)
+        if check is None:
+            raise ValueError(f"Unknown {section} setting '{key}'")
+        if not check(value):
             raise ValueError(f"Invalid value for '{key}': {value!r}")
         merged[key] = value
     return merged
@@ -198,18 +271,23 @@ def _validated_dictation(candidate: object, base: dict) -> dict:
 
 def _load_settings() -> dict:
     """Read settings from disk, falling back field by field to the defaults."""
-    settings = {"dictation": dict(DEFAULT_SETTINGS["dictation"])}
+    settings = {name: dict(values) for name, values in DEFAULT_SETTINGS.items()}
     try:
         stored = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return settings
-    if isinstance(stored, dict) and isinstance(stored.get("dictation"), dict):
+    if not isinstance(stored, dict):
+        return settings
+    for section in DEFAULT_SETTINGS:
+        section_values = stored.get(section)
+        if not isinstance(section_values, dict):
+            continue
         # Field by field: one hand-edited bad value must not take the server
         # down or discard the other stored settings.
-        for key, value in stored["dictation"].items():
+        for key, value in section_values.items():
             try:
-                settings["dictation"] = _validated_dictation(
-                    {key: value}, settings["dictation"]
+                settings[section] = _validated_section(
+                    section, {key: value}, settings[section]
                 )
             except ValueError:
                 continue
@@ -242,7 +320,9 @@ stopping = threading.Event()
 # result; the transcript itself lives in TRANSCRIPTS_DIR.
 JOB_RETENTION_SECONDS = 60 * 60
 MAX_REMEMBERED_JOBS = 50
-TERMINAL_JOB_STATUSES = {"done", "error"}
+# A job in one of these is settled: safe to evict, no longer cancellable, and
+# never resurrected by a worker returning from an in-flight model call.
+TERMINAL_JOB_STATUSES = {"done", "error", "cancelled"}
 
 
 def _transcript_path(transcript_id: str) -> Path:
@@ -263,6 +343,9 @@ def _save_transcript(job: dict, result: dict, finished_at: float) -> None:
         "model": job.get("model"),
         "language_requested": job.get("language"),
         "timestamps_requested": bool(job.get("timestamps")),
+        # Set when timestamps were asked for but the aligner could not produce
+        # them, so reopening the transcript still explains the missing .srt.
+        "timestamps_unavailable": job.get("timestamps_unavailable"),
         "turbo": bool(job.get("turbo")),
         "context": job.get("context") or "",
         "result": result,
@@ -391,6 +474,11 @@ def _prune_jobs_locked() -> None:
     surviving = sorted((item for item in finished if item[1] not in evict), reverse=True)
     evict.update(job_id for _stamp, job_id in surviving[MAX_REMEMBERED_JOBS:])
     for job_id in evict:
+        # A failed job keeps its upload so it can be retried; forgetting the
+        # job is the last moment anything still knows to delete the file.
+        retained = jobs.get(job_id, {}).get("path")
+        if retained:
+            Path(retained).unlink(missing_ok=True)
         jobs.pop(job_id, None)
 
 
@@ -407,6 +495,14 @@ def _run_job(job_id: str) -> None:
         job = dict(jobs[job_id])
 
     path = Path(job["path"])
+    cancelled = job["cancelled"]
+    if cancelled.is_set():
+        # Cancelled while it sat in the queue: never load a model for it.
+        _update(job_id, status="cancelled", detail="Cancelled", progress=0.0,
+                finished_at=time.time())
+        path.unlink(missing_ok=True)
+        return
+
     try:
         if stopping.is_set():
             raise RuntimeError("Server stopped before this job started")
@@ -451,14 +547,36 @@ def _run_job(job_id: str) -> None:
         languages: list[str] = []
         truncated = False
         processed_sec = 0.0
+        timestamps_unavailable: str | None = None
 
         # split_audio_into_chunks returns (waveform, offset_seconds) tuples.
         for i, (chunk_audio, chunk_offset) in enumerate(chunks):
+            if cancelled.is_set():
+                raise _JobCancelled
             if stopping.is_set():
                 raise RuntimeError("Server stopped before this job finished")
-            result = session.transcribe(chunk_audio, **kwargs)
+            try:
+                result = session.transcribe(chunk_audio, **kwargs)
+            except Exception as exc:
+                # A word-timestamp backend failure — a missing CJK tokenizer, a
+                # bad aligner asset — must cost the timestamps, not the whole
+                # transcript. Retry this chunk without them and stay that way,
+                # so a two-hour file does not fail twice per chunk.
+                if not kwargs.get("return_timestamps"):
+                    raise
+                timestamps_unavailable = (
+                    f"Word timestamps are unavailable for this audio "
+                    f"({type(exc).__name__}: {exc}). The transcript itself is complete."
+                )
+                kwargs["return_timestamps"] = False
+                segments.clear()
+                _update(job_id, timestamps_unavailable=timestamps_unavailable)
+                result = session.transcribe(chunk_audio, **kwargs)
             # The model call itself cannot be interrupted. Recheck immediately
-            # afterwards so its final chunk cannot complete a job after stop.
+            # afterwards so its final chunk cannot complete a job after a stop
+            # or a cancel.
+            if cancelled.is_set():
+                raise _JobCancelled
             if stopping.is_set():
                 raise RuntimeError("Server stopped before this job finished")
             if result.text:
@@ -492,12 +610,17 @@ def _run_job(job_id: str) -> None:
         result = {
             "text": _join_transcript_texts(texts, language),
             "language": language,
-            "segments": segments or None,   # word-level [{text,start,end}]
+            # word-level [{text,start,end}]
+            "segments": None if timestamps_unavailable else (segments or None),
             "truncated": truncated,
         }
         history_saved = True
         history_error = None
-        completed_job = {**job, "started_at": started_at}
+        completed_job = {
+            **job,
+            "started_at": started_at,
+            "timestamps_unavailable": timestamps_unavailable,
+        }
         # Serialize the final durable write with shutdown. Whichever acquires
         # jobs_lock first owns the outcome: either this transcript is fully
         # saved and marked done, or shutdown marks it error and no file appears.
@@ -525,8 +648,11 @@ def _run_job(job_id: str) -> None:
                 result=result,
                 history_saved=history_saved,
                 history_error=history_error,
+                timestamps_unavailable=timestamps_unavailable,
             )
             _prune_jobs_locked()
+    except _JobCancelled:
+        _update(job_id, status="cancelled", detail="Cancelled", partial=None)
     except Exception as exc:  # surface the real cause to the UI
         _update(
             job_id,
@@ -535,7 +661,17 @@ def _run_job(job_id: str) -> None:
             finished_at=time.time(),
         )
     finally:
-        path.unlink(missing_ok=True)
+        # A job that failed on its own keeps its upload so "Retry" does not
+        # need a re-upload; _prune_jobs_locked deletes it when the job is
+        # finally forgotten. A shutdown is not a retryable failure, and must
+        # leave nothing staged behind.
+        with jobs_lock:
+            retry_pending = (
+                not stopping.is_set()
+                and jobs.get(job_id, {}).get("status") == "error"
+            )
+        if not retry_pending:
+            path.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -651,9 +787,9 @@ def config() -> dict:
 
 def _settings_response() -> dict:
     with settings_lock:
-        dictation = dict(_settings["dictation"])
+        sections = {name: dict(_settings[name]) for name in DEFAULT_SETTINGS}
     return {
-        "dictation": dictation,
+        **sections,
         "options": {
             "hotkeys": [
                 {"id": key, "label": label} for key, label in DICTATION_HOTKEYS.items()
@@ -672,19 +808,27 @@ def get_settings() -> dict:
 @app.put("/api/settings")
 def update_settings(payload: dict) -> dict:
     with settings_lock:
+        # Validate every section before committing any of them, so a bad value
+        # in one cannot half-apply the payload.
         try:
-            merged = _validated_dictation(
-                payload.get("dictation", {}), _settings["dictation"]
-            )
+            unknown = set(payload) - set(DEFAULT_SETTINGS)
+            if unknown:
+                raise ValueError(f"Unknown settings section '{sorted(unknown)[0]}'")
+            merged = {
+                name: _validated_section(name, payload[name], _settings[name])
+                if name in payload
+                else dict(_settings[name])
+                for name in DEFAULT_SETTINGS
+            }
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         # Persist first, then commit to memory: a failed write must not leave
         # a live value the dictation helper applies but a restart forgets.
         try:
-            _save_settings({"dictation": merged})
+            _save_settings(merged)
         except OSError as exc:
             raise HTTPException(500, f"Could not save settings: {exc}") from exc
-        _settings["dictation"] = merged
+        _settings.update(merged)
     return _settings_response()
 
 
@@ -756,6 +900,7 @@ async def create_job(
             "partial": None,
             "context": context.strip(),
             "path": str(dest),
+            "cancelled": threading.Event(),
             "created_at": time.time(),
             "result": None,
         }
@@ -779,14 +924,106 @@ async def create_job(
     return JSONResponse({"id": job_id})
 
 
+@app.get("/api/jobs")
+def list_jobs() -> dict:
+    """Everything the queue view needs, newest first.
+
+    One worker means a second upload really does wait, so the queue has to be
+    visible: without it a queued file looks indistinguishable from a hung one.
+    """
+    with jobs_lock:
+        _prune_jobs_locked()
+        ordered = sorted(
+            jobs.values(), key=lambda job: job.get("created_at") or 0.0, reverse=True
+        )
+        return {"jobs": [_public_job(job) for job in ordered]}
+
+
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
     with jobs_lock:
         job = jobs.get(job_id)
         if job is None:
             raise HTTPException(404, "Job not found")
-        public = {k: v for k, v in job.items() if k != "path"}
-    return public
+        return _public_job(job)
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> dict:
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Job not found")
+        if job["status"] in TERMINAL_JOB_STATUSES:
+            raise HTTPException(409, f"This job already finished ({job['status']})")
+        job["cancelled"].set()
+        # A queued job is never picked up, so settle it here rather than wait
+        # for a worker that may be several long files away from reaching it.
+        if job["status"] == "queued":
+            job.update(status="cancelled", detail="Cancelled", finished_at=time.time())
+            Path(job["path"]).unlink(missing_ok=True)
+    return {"id": job_id, "status": "cancelled"}
+
+
+@app.post("/api/jobs/{job_id}/retry")
+def retry_job(job_id: str) -> JSONResponse:
+    """Requeue a failed job without a second upload.
+
+    Only a failure qualifies. Cancelling is a deliberate "I don't want this",
+    and its upload is deleted immediately rather than kept on the chance of a
+    retry — this app does not hoard audio the user has already abandoned.
+    """
+    submit_error: BaseException | None = None
+    future: Future | None = None
+    with jobs_lock:
+        source = jobs.get(job_id)
+        if source is None:
+            raise HTTPException(404, "Job not found")
+        if source["status"] != "error":
+            raise HTTPException(409, "Only a failed job can be retried")
+        original = Path(source["path"])
+        if not original.is_file():
+            raise HTTPException(
+                404, "The uploaded file is no longer available — upload it again"
+            )
+
+        new_id = uuid.uuid4().hex[:12]
+        destination = UPLOAD_DIR / f"{new_id}{original.suffix}"
+        # Copied rather than moved: the original job stays retryable until it
+        # is evicted, so a retry that fails immediately can be retried again.
+        shutil.copy2(original, destination)
+        _prune_jobs_locked()
+        jobs[new_id] = {
+            **{key: value for key, value in source.items()
+               if key not in _RESET_ON_RETRY},
+            "id": new_id,
+            "status": "queued",
+            "detail": "Queued",
+            "progress": 0.0,
+            "partial": None,
+            "result": None,
+            "path": str(destination),
+            "cancelled": threading.Event(),
+            "created_at": time.time(),
+        }
+        # Same ordering as create_job: register the Future under the lock so
+        # shutdown cleanup cannot miss a worker that starts immediately.
+        try:
+            future = executor.submit(_run_job, new_id)
+            job_futures[new_id] = future
+        except BaseException as exc:
+            jobs.pop(new_id, None)
+            submit_error = exc
+
+    if submit_error is not None:
+        destination.unlink(missing_ok=True)
+        if isinstance(submit_error, RuntimeError):
+            raise HTTPException(503, "The transcription worker is stopping") from submit_error
+        raise submit_error
+
+    assert future is not None
+    future.add_done_callback(lambda _future: _forget_future(new_id))
+    return JSONResponse({"id": new_id})
 
 
 @app.get("/api/transcripts")

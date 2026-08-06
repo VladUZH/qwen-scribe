@@ -67,6 +67,7 @@
   .drop h2 { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
   .drop p { color: var(--muted); font-size: 13.5px; }
   .drop .formats { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; margin-top: 14px; color: var(--muted); }
+  .drop .drop-note { font-size: 11.5px; margin-top: 10px; opacity: .72; }
   input[type=file] { display: none; }
 
   /* Options */
@@ -115,6 +116,7 @@
   .dictation-copy { flex: 1; min-width: 0; }
   .dictation-title { display: flex; align-items: center; gap: 9px; font-size: 13.5px; font-weight: 600; }
   .dictation-copy p { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-top: 3px; }
+  .dictation-copy p + p { margin-top: 7px; }
   .dictation-status { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
   .dictation-status::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: 1px; }
   .dictation-status.ready { color: var(--ok); }
@@ -171,7 +173,8 @@
   .transcript.visible { display: block; }
   .t-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
   .t-meta { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11.5px; color: var(--muted); }
-  .t-actions { display: flex; gap: 8px; }
+  .t-actions { display: flex; gap: 8px; align-items: center; }
+  .t-toggle { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); white-space: nowrap; cursor: pointer; }
   button.act {
     background: var(--panel-2);
     border: 1px solid var(--line);
@@ -219,6 +222,15 @@
   .history-title { display: flex; align-items: baseline; gap: 9px; }
   .history h2 { font-size: 16px; font-weight: 600; }
   .history-count { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); }
+  .queue { margin-top: 22px; }
+  .queue h2 { font-size: 16px; font-weight: 600; margin-bottom: 11px; }
+  .queue-list { display: grid; gap: 8px; list-style: none; }
+  .queue-item { display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 11px 14px; }
+  .queue-name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; flex: 1 1 auto; min-width: 0; }
+  .queue-state { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); text-align: right; flex: 0 1 auto; overflow-wrap: anywhere; }
+  .queue-item.done .queue-state { color: var(--ok); }
+  .queue-item.error .queue-state { color: var(--err); }
+  .queue-item .act { padding: 5px 10px; font-size: 11.5px; flex: none; }
   .history-list { display: grid; gap: 10px; }
   .history-empty { color: var(--muted); font-size: 13px; text-align: center; background: var(--panel); border: 1px dashed var(--line); border-radius: var(--radius); padding: 28px 18px; }
   .history-item { background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 15px 16px; }
@@ -237,6 +249,8 @@
     .t-head { flex-direction: column; align-items: flex-start; gap: 10px; }
     .dictation { align-items: flex-start; }
     .dictation-status { display: none; }
+    .queue-item { flex-wrap: wrap; }
+    .queue-state { text-align: left; }
     .history-item-head, .history-foot { align-items: flex-start; }
     .history-foot { flex-direction: column; }
     .history-head { flex-direction: column; align-items: flex-start; }
@@ -256,6 +270,7 @@
     <h2>Drop audio or video here</h2>
     <p>or click to choose a file — everything runs locally on this Mac</p>
     <div class="formats" id="formats">wav · mp3 · m4a · flac · ogg · qta · mp4 · mov · mkv · webm</div>
+    <p class="drop-note">Up to 4 GB per file — the upload is staged on disk before transcribing. For a longer video, extract the audio track first.</p>
   </div>
   <input type="file" id="file" accept="audio/*,video/*,.mkv,.opus,.qta">
 
@@ -281,7 +296,7 @@
     </div>
     <div class="field field-wide">
       <label for="context">Domain vocabulary <span style="text-transform:none;font-weight:400">(optional — space-separated terms, e.g. "EBITDA CapEx ESG")</span></label>
-      <input type="text" id="context" placeholder="Rare names and terms the audio contains">
+      <input type="text" id="context" maxlength="2000" placeholder="Rare names and terms the audio contains">
     </div>
   </div>
 
@@ -290,6 +305,7 @@
     <div class="dictation-copy">
       <div class="dictation-title">Desktop dictation</div>
       <p>Hold in any text field to record; release to transcribe and paste. macOS may ask for Microphone, Accessibility, and Input Monitoring access.</p>
+      <p>Qwen Scribe runs from the menu bar — the waveform icon at the top right of the screen has Open, Restart Server, and Quit. Closing this tab does not stop it.</p>
     </div>
     <div class="dictation-status" id="dictationStatus">starting</div>
   </div>
@@ -320,10 +336,16 @@
     <div class="job-error" id="jobError"></div>
   </div>
 
+  <section class="queue" id="queue" aria-labelledby="queueHeading" hidden>
+    <h2 id="queueHeading">Queue</h2>
+    <ul class="queue-list" id="queueList"></ul>
+  </section>
+
   <div class="transcript" id="transcript">
     <div class="t-head">
       <div class="t-meta" id="tMeta"></div>
       <div class="t-actions">
+        <label class="t-toggle"><input type="checkbox" id="oneSentencePerLine"> One sentence per line</label>
         <button class="act" id="btnCopy">Copy text</button>
         <button class="act" id="btnTxt">Download .txt</button>
         <button class="act" id="btnSrt" hidden>Download .srt</button>
@@ -404,6 +426,8 @@
     pollTimer = null;
   };
 
+  // Also awaited by loadSettings: applying a stored language to a <select>
+  // that has not been populated yet is a silent no-op.
   const configReady = fetch("/api/config").then(r => {
     if (!r.ok) throw new Error();
     return r.json();
@@ -508,6 +532,7 @@
       return fail(body.detail || `Upload failed (${res.status})`);
     }
     const { id } = await res.json();
+    refreshQueue();
     if (seq !== submissionSeq) return;
     schedulePoll(id, seq);
   }
@@ -519,6 +544,86 @@
       pollTimer = null;
       poll(id, seq);
     }, 800);
+  }
+
+  // ── Queue ─────────────────────────────────────────────────────────────
+  // One worker means a second file genuinely waits its turn, so the queue has
+  // to be visible: otherwise "queued" is indistinguishable from "stuck", and
+  // the detail panel above only ever tracks the most recent upload.
+  const FINISHED = new Set(["done", "error", "cancelled"]);
+
+  function queueButton(label, danger, onClick) {
+    const button = document.createElement("button");
+    button.className = danger ? "act danger" : "act";
+    button.textContent = label;
+    button.addEventListener("click", () => { button.disabled = true; onClick(); });
+    return button;
+  }
+
+  function renderQueue(all) {
+    // The listing arrives newest-first, which is right for the finished tail
+    // but backwards for the queue: unfinished work is shown, and numbered, in
+    // the order the single worker will actually reach it.
+    const active = all.filter(job => !FINISHED.has(job.status)).reverse();
+    const waiting = active.filter(job => job.status === "queued");
+    const rows = [...active, ...all.filter(job => FINISHED.has(job.status)).slice(0, 5)];
+    $("queue").hidden = rows.length === 0;
+    $("queueList").replaceChildren(...rows.map(job => {
+      const row = document.createElement("li");
+      row.className = `queue-item ${job.status}`;
+      const name = document.createElement("span");
+      name.className = "queue-name";
+      name.textContent = job.filename || "(unnamed)";
+      const state = document.createElement("span");
+      state.className = "queue-state";
+      const place = waiting.indexOf(job);
+      state.textContent = job.status === "queued"
+        ? (place === 0 ? "queued — next" : `queued — ${place + 1} ahead`)
+        : (job.detail || job.status);
+      row.append(name, state);
+      if (job.status === "done") {
+        // A retried or background job finishes outside the detail panel's
+        // poll loop, so this is the only way to reach its transcript.
+        row.append(queueButton("Open", false, () => openTranscript(job.id)));
+      }
+      if (!FINISHED.has(job.status)) {
+        row.append(queueButton("Cancel", true, () => act(`/api/jobs/${job.id}/cancel`)));
+      } else if (job.status === "error") {
+        // Only a failure keeps its upload; a cancelled job's audio is gone,
+        // so offering Retry there would be a button that cannot work.
+        row.append(queueButton("Retry", false, () => act(`/api/jobs/${job.id}/retry`)));
+      }
+      return row;
+    }));
+  }
+
+  async function act(url) {
+    try {
+      const res = await fetch(url, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        $("jobError").textContent = body.detail || `Request failed (${res.status})`;
+      }
+    } catch {
+      $("jobError").textContent = "Server unreachable. Is server.py still running?";
+    }
+    refreshQueue();
+  }
+
+  let seenDone = null;
+
+  async function refreshQueue() {
+    let jobs;
+    try {
+      const body = await fetch("/api/jobs").then(r => r.json());
+      jobs = Array.isArray(body.jobs) ? body.jobs : [];
+    } catch { return; }   // the poll loop already reports a server that is gone
+    renderQueue(jobs);
+    // A retried or background job saves its transcript without the detail
+    // panel's poll loop ever seeing it, so the history list has to be told.
+    const done = jobs.filter(job => job.status === "done").map(job => job.id);
+    if (seenDone && done.some(id => !seenDone.has(id))) loadHistory();
+    seenDone = new Set(done);
   }
 
   // Give up rather than hammer a server that is gone, but tolerate the brief
@@ -560,7 +665,8 @@
       if (job.partial) {
         $("transcript").classList.add("visible");
         $("tMeta").textContent = "live transcript — updating as chunks finish";
-        $("tBody").textContent = job.partial;
+        lastResult = { text: job.partial, segments: null, language: null };
+        renderTranscriptBody();
         ["btnCopy","btnTxt","btnSrt"].forEach(b => $(b).hidden = true);
       }
       schedulePoll(id, seq);
@@ -578,6 +684,7 @@
         finishedAt: job.finished_at,
         historySaved: job.history_saved,
         historyError: job.history_error,
+        timestampsUnavailable: job.timestamps_unavailable,
       });
       if (job.history_saved) loadHistory();
       return;
@@ -585,6 +692,16 @@
     if (job.status === "error") {
       stopPolling();
       fail(job.detail || "Transcription failed");
+      refreshQueue();
+      return;
+    }
+    if (job.status === "cancelled") {
+      stopPolling();
+      $("jobStatus").textContent = "cancelled";
+      $("jobDetail").textContent = "Cancelled — the file was not transcribed.";
+      $("transcript").classList.remove("visible");
+      paintProgress(0, false);
+      refreshQueue();
       return;
     }
     if (!["queued", "loading", "processing", "done"].includes(job.status)) {
@@ -601,7 +718,9 @@
     paintProgress(0, false);
     // A job that failed part-way still produced usable text. Keep it, but
     // relabel it so it can never be mistaken for a finished transcript.
-    const partial = $("transcript").classList.contains("visible") ? $("tBody").textContent : "";
+    // Read the raw text, not the rendered body: the sentence-per-line view
+    // would otherwise bake its line breaks into the canonical transcript.
+    const partial = $("transcript").classList.contains("visible") ? (lastResult?.text || "") : "";
     if (partial) {
       lastResult = { text: partial, segments: null, language: null };
       $("tMeta").textContent = "partial transcript — the job failed before finishing";
@@ -614,10 +733,43 @@
     }
   }
 
-  $("model").addEventListener("change", () => {
+  function syncTurboAvailability() {
     const is06 = $("model").value === "0.6b";
     $("turbo").disabled = is06;
     $("turboWrap").style.opacity = is06 ? 0.4 : 1;
+  }
+  $("model").addEventListener("change", syncTurboAvailability);
+
+  // Split after sentence-final punctuation, keeping the mark on the sentence
+  // it ends. Two cases, because Chinese and Japanese are written without
+  // spaces: an ideographic full stop is a boundary even when the next
+  // character follows it immediately, whereas an ASCII period also needs the
+  // following whitespace to tell "end." from "3.5". Requiring the next
+  // sentence not to start lowercase is what keeps "e.g. this" on one line;
+  // Qwen3-ASR's punctuation and capitalization are what make that reliable.
+  // Guards, in order: not right after an initial or a dotted abbreviation
+  // ("J. R. R.", "U.S.", "e.g.", "i.e."), and not after a common title.
+  const SENTENCE_BREAK =
+    /(?<=[。！？])(?=\S)|(?<!\b[A-Za-z]\.)(?<!\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|No|Fig|Inc|Ltd|Co)\.)(?<=[.!?。！？…])\s+(?=[^a-z])/;
+
+  function sentenceLines(text) {
+    return (text || "")
+      .split(SENTENCE_BREAK)
+      .map(sentence => sentence.trim())
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  function renderTranscriptBody() {
+    const text = lastResult?.text || "";
+    $("tBody").textContent = $("oneSentencePerLine").checked
+      ? (sentenceLines(text) || "(no speech detected)")
+      : (text || "(no speech detected)");
+  }
+
+  $("oneSentencePerLine").addEventListener("change", () => {
+    renderTranscriptBody();
+    saveTranscription({ sentence_per_line: $("oneSentencePerLine").checked });
   });
 
   function showResult(result, details = {}) {
@@ -629,7 +781,7 @@
     $("transcript").classList.add("visible");
     $("btnCopy").hidden = false;
     $("btnTxt").hidden = false;
-    $("tBody").textContent = result.text || "(no speech detected)";
+    renderTranscriptBody();
     const words = (result.text || "").split(/\s+/).filter(Boolean).length;
     const meta = [];
     if (details.filename) meta.push(details.filename);
@@ -640,6 +792,7 @@
     if (details.historySaved !== false) notes.push("Saved automatically to transcript history.");
     if (details.historyError) notes.push(details.historyError);
     if (result.truncated) notes.push("One chunk hit its decode limit — very long noisy sections may be incomplete.");
+    if (details.timestampsUnavailable) notes.push(details.timestampsUnavailable);
     $("tNote").textContent = notes.join(" ");
     if (details.scroll !== false) {
       $("transcript").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -647,7 +800,7 @@
   }
 
   $("btnCopy").addEventListener("click", async () => {
-    await navigator.clipboard.writeText(lastResult?.text || "");
+    await navigator.clipboard.writeText(transcriptText());
     $("btnCopy").textContent = "Copied";
     setTimeout(() => $("btnCopy").textContent = "Copy text", 1400);
   });
@@ -660,8 +813,13 @@
     URL.revokeObjectURL(a.href);
   };
 
+  // What is on screen is what gets downloaded and copied, so the
+  // sentence-per-line view is not silently discarded on the way out.
+  const transcriptText = () =>
+    $("oneSentencePerLine").checked ? sentenceLines(lastResult?.text) : (lastResult?.text || "");
+
   $("btnTxt").addEventListener("click", () =>
-    download(`${baseName}.txt`, lastResult?.text || "", "text/plain"));
+    download(`${baseName}.txt`, transcriptText(), "text/plain"));
 
   // Build SRT cues from word-level segments: break on long pauses,
   // ~42 chars, or 6 s per cue.
@@ -727,6 +885,7 @@
       filename: transcript.filename,
       finishedAt: transcript.finished_at,
       historySaved: true,
+      timestampsUnavailable: transcript.timestamps_unavailable,
     });
   }
 
@@ -773,7 +932,44 @@
     fill($("setLanguage"), body.options.languages, body.dictation.language);
     $("dictationKey").textContent = HOTKEY_LABELS[body.dictation.hotkey] || "Right ⌘";
     $("dictationSettings").hidden = false;
+    await configReady.catch(() => {});
+    applyTranscriptionSettings(body.transcription);
   }
+
+  // ── Transcription options (persisted server-side, like the dictation ones,
+  //    so they survive a cleared browser cache and a different browser) ──
+  function applyTranscriptionSettings(stored) {
+    if (!stored) return;
+    $("model").value = stored.model;
+    $("language").value = stored.language;
+    $("timestamps").checked = stored.timestamps;
+    $("turbo").checked = stored.turbo;
+    $("context").value = stored.context;
+    $("oneSentencePerLine").checked = stored.sentence_per_line;
+    // Called directly rather than by dispatching "change", which would also
+    // fire the save listener and write the settings straight back on load.
+    syncTurboAvailability();
+  }
+
+  function saveTranscription(patch) {
+    // A failed save must never block transcribing, so this is fire-and-forget.
+    fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcription: patch }),
+    }).catch(() => {});
+  }
+
+  ["model", "language"].forEach(id =>
+    $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).value })));
+  ["timestamps", "turbo"].forEach(id =>
+    $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).checked })));
+  let contextSaveTimer = null;
+  $("context").addEventListener("input", () => {
+    clearTimeout(contextSaveTimer);   // one write per pause, not per keystroke
+    contextSaveTimer = setTimeout(
+      () => saveTranscription({ context: $("context").value }), 600);
+  });
 
   // Two quick changes race: the first PUT's response must not overwrite the
   // second's state, and a failed save must not "restore" stale selects.
@@ -956,6 +1152,10 @@
 
   loadSettings();
   loadHistory();
+  refreshQueue();
+  // Cheap localhost GET; keeps the queue honest when a job is cancelled or
+  // queued from another tab, and when the detail panel is not polling.
+  setInterval(refreshQueue, 1500);
   refreshDictationStatus();
   setInterval(refreshDictationStatus, 5000);
 })();

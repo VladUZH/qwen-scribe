@@ -6,6 +6,46 @@ details when clearly documented.
 
 ## [Unreleased]
 
+## [0.2.2-beta.1] - 2026-08-06
+
+Everything in this release comes from one hands-on testing report on r/macapps
+from someone who ran real video files through v0.2.1-beta.1.
+
+### Added
+
+- A visible transcription queue. Every job is listed in the order the worker
+  will reach it, with its position while it waits, a Cancel button that stops
+  a queued or running job, Retry for a failed one that does not need the file
+  uploaded again, and Open for a finished one
+- A "one sentence per line" toggle on the transcript, so a long result is not
+  one unbroken wall of text. Copy text and Download .txt follow the view, and
+  the choice is remembered
+- The file-transcription choices — model, language, word timestamps, turbo,
+  and vocabulary hints — are now remembered. They are stored by the server
+  alongside the dictation settings, so they survive a reload, a restart, a
+  cleared browser cache, and a different browser
+- All fourteen languages Qwen3-ASR supports are now selectable — Arabic,
+  Chinese, Dutch, Hindi, Japanese, Korean, Portuguese, and Turkish join the
+  six that were already listed
+
+### Changed
+
+- The 4 GB per-file cap is now stated on the drop zone and in the README, and
+  the error explains that it protects against a staged upload needing twice
+  the file's size in free disk space rather than being a model limit
+- The web interface now says that Qwen Scribe is a menu-bar app, and that Open,
+  Restart Server, and Quit live there — a tester reported being unable to find
+  any way to quit or restart it
+
+### Fixed
+
+- Word timestamps and SRT export now work for Japanese and Korean audio. The
+  forced aligner needs the `nagisa` and `soynlp` tokenizers for those two
+  languages; they were never installed, and the error told users to run a
+  `pip install` that could not reach the app's own private environment
+- A word-timestamp failure no longer destroys the transcription. The chunk is
+  retried without timestamps, the finished text is kept and saved to history,
+  and the transcript view explains why there is no `.srt`
 ## [0.2.1-beta.1] - 2026-08-02
 
 ### Fixed
@@ -138,7 +178,8 @@ with `make app`. Signed and notarized binaries are planned for v0.2.
   developer `.venv`
 - Model weights and generated app bundles are explicitly excluded from source
 
-[Unreleased]: https://github.com/VladUZH/qwen-scribe/compare/v0.2.1-beta.1...HEAD
+[Unreleased]: https://github.com/VladUZH/qwen-scribe/compare/v0.2.2-beta.1...HEAD
+[0.2.2-beta.1]: https://github.com/VladUZH/qwen-scribe/compare/v0.2.1-beta.1...v0.2.2-beta.1
 [0.2.1-beta.1]: https://github.com/VladUZH/qwen-scribe/compare/v0.2.0-beta.1...v0.2.1-beta.1
 [0.2.0-beta.1]: https://github.com/VladUZH/qwen-scribe/compare/v0.1.0-beta.1...v0.2.0-beta.1
 [0.1.0-beta.1]: https://github.com/VladUZH/qwen-scribe/releases/tag/v0.1.0-beta.1
