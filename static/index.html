@@ -339,6 +339,7 @@
   <section class="queue" id="queue" aria-labelledby="queueHeading" hidden>
     <h2 id="queueHeading">Queue</h2>
     <ul class="queue-list" id="queueList"></ul>
+    <div class="job-error" id="queueError"></div>
   </section>
 
   <div class="transcript" id="transcript">
@@ -484,6 +485,9 @@
     const extension = (file.name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
     currentFile = file;
     lastResult = null;
+    // This upload owns the transcript pane again, so the live view below is
+    // free to paint into it until the user opens something else.
+    activeTranscriptId = null;
     baseName = file.name.replace(/\.[^.]+$/, "") || "transcript";
     $("job").classList.add("visible");
     $("transcript").classList.remove("visible");
@@ -566,6 +570,9 @@
     // the order the single worker will actually reach it.
     const active = all.filter(job => !FINISHED.has(job.status)).reverse();
     const waiting = active.filter(job => job.status === "queued");
+    // Only a job that is actually running counts as one ahead, and between two
+    // files there is a moment when none is.
+    const running = active.length > waiting.length;
     const rows = [...active, ...all.filter(job => FINISHED.has(job.status)).slice(0, 5)];
     $("queue").hidden = rows.length === 0;
     $("queueList").replaceChildren(...rows.map(job => {
@@ -578,7 +585,7 @@
       state.className = "queue-state";
       const place = waiting.indexOf(job);
       state.textContent = job.status === "queued"
-        ? (place === 0 ? "queued — next" : `queued — ${place + 1} ahead`)
+        ? (place === 0 ? "queued — next" : `queued — ${place + (running ? 1 : 0)} ahead`)
         : (job.detail || job.status);
       row.append(name, state);
       if (job.status === "done") {
@@ -587,10 +594,16 @@
         row.append(queueButton("Open", false, () => openTranscript(job.id)));
       }
       if (!FINISHED.has(job.status)) {
-        row.append(queueButton("Cancel", true, () => act(`/api/jobs/${job.id}/cancel`)));
-      } else if (job.status === "error") {
+        const cancel = queueButton("Cancel", true, () => act(`/api/jobs/${job.id}/cancel`));
+        // The worker only reaches its next cancellation check when the current
+        // chunk returns. Leave the button spent rather than inviting a second
+        // request that changes nothing.
+        cancel.disabled = Boolean(job.cancel_requested);
+        row.append(cancel);
+      } else if (job.status === "error" && !job.retried_as) {
         // Only a failure keeps its upload; a cancelled job's audio is gone,
-        // so offering Retry there would be a button that cannot work.
+        // so offering Retry there would be a button that cannot work. A job
+        // already retried keeps its row, but not a button that now 409s.
         row.append(queueButton("Retry", false, () => act(`/api/jobs/${job.id}/retry`)));
       }
       return row;
@@ -598,27 +611,48 @@
   }
 
   async function act(url) {
+    let message = "";
     try {
       const res = await fetch(url, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        $("jobError").textContent = body.detail || `Request failed (${res.status})`;
+        message = body.detail || `Request failed (${res.status})`;
       }
     } catch {
-      $("jobError").textContent = "Server unreachable. Is server.py still running?";
+      message = "Server unreachable. Is server.py still running?";
     }
+    // A queue failure belongs to the queue. #jobError lives inside the upload
+    // card, which is invisible until this tab has uploaded something and
+    // describes a different job when it is not.
+    $("queueError").textContent = message;
+    // Nothing changed server-side, so the repaint below would be skipped and
+    // the button this click disabled would stay dead.
+    if (message) queueSignature = null;
     refreshQueue();
   }
 
   let seenDone = null;
+  let queueSeq = 0;
+  let queueSignature = null;
 
   async function refreshQueue() {
+    const seq = ++queueSeq;
     let jobs;
     try {
       const body = await fetch("/api/jobs").then(r => r.json());
       jobs = Array.isArray(body.jobs) ? body.jobs : [];
     } catch { return; }   // the poll loop already reports a server that is gone
-    renderQueue(jobs);
+    // An interval request already in flight when Cancel or Retry fires must
+    // not land last and repaint the queue as it was before the click.
+    if (seq !== queueSeq) return;
+    // Rebuilding an unchanged list every 1.5 s drops keyboard focus and slides
+    // rows out from under the pointer between a press and its release.
+    const signature = JSON.stringify(jobs.map(job =>
+      [job.id, job.status, job.detail, job.cancel_requested, job.retried_as]));
+    if (signature !== queueSignature) {
+      queueSignature = signature;
+      renderQueue(jobs);
+    }
     // A retried or background job saves its transcript without the detail
     // panel's poll loop ever seeing it, so the history list has to be told.
     const done = jobs.filter(job => job.status === "done").map(job => job.id);
@@ -662,7 +696,9 @@
 
     if (job.status === "processing" || job.status === "loading" || job.status === "queued") {
       paintProgress(job.progress || 0, true);
-      if (job.partial) {
+      // Opening a finished transcript while this one runs is a deliberate act.
+      // Without this the next tick paints the live text over what was opened.
+      if (job.partial && (activeTranscriptId === null || activeTranscriptId === job.id)) {
         $("transcript").classList.add("visible");
         $("tMeta").textContent = "live transcript — updating as chunks finish";
         lastResult = { text: job.partial, segments: null, language: null };
@@ -740,21 +776,40 @@
   }
   $("model").addEventListener("change", syncTurboAvailability);
 
-  // Split after sentence-final punctuation, keeping the mark on the sentence
-  // it ends. Two cases, because Chinese and Japanese are written without
-  // spaces: an ideographic full stop is a boundary even when the next
-  // character follows it immediately, whereas an ASCII period also needs the
-  // following whitespace to tell "end." from "3.5". Requiring the next
-  // sentence not to start lowercase is what keeps "e.g. this" on one line;
-  // Qwen3-ASR's punctuation and capitalization are what make that reliable.
+  // Split after sentence-final punctuation, keeping the mark — and any closing
+  // quote or bracket belonging to it — on the sentence it ends. Two cases,
+  // because Chinese and Japanese are written without spaces: an ideographic
+  // full stop is a boundary even when the next character follows it
+  // immediately, whereas an ASCII period also needs the following whitespace
+  // to tell "end." from "3.5". Requiring the next sentence not to start
+  // lowercase is what keeps "e.g. this" on one line; Qwen3-ASR's punctuation
+  // and capitalization are what make that reliable.
   // Guards, in order: not right after an initial or a dotted abbreviation
-  // ("J. R. R.", "U.S.", "e.g.", "i.e."), and not after a common title.
-  const SENTENCE_BREAK =
-    /(?<=[。！？])(?=\S)|(?<!\b[A-Za-z]\.)(?<!\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|No|Fig|Inc|Ltd|Co)\.)(?<=[.!?。！？…])\s+(?=[^a-z])/;
+  // ("J. R. R.", "U.S.", "e.g.", "i.e."), and not after a common title. The
+  // same guards also hold back "p.m. Then" — the price of never breaking a
+  // line mid-abbreviation, which is the more visible mistake.
+  // Assembled with RegExp rather than written as a literal because a literal
+  // is parsed with the script: on an engine without lookbehind the whole
+  // interface would die rather than just this one toggle.
+  const CLOSERS = String.raw`["'”’»)\]}」』】）]*`;
+  let SENTENCE_BREAK = null;
+  try {
+    SENTENCE_BREAK = new RegExp(
+      String.raw`(?<=[。！？])(${CLOSERS})(?=\S)` +
+      String.raw`|(?<=[.!?。！？…])(?<!\b[A-Za-z]\.)` +
+      String.raw`(?<!\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|No|Fig|Inc|Ltd|Co)\.)` +
+      String.raw`(${CLOSERS})\s+(?=[^a-z])`,
+      "g",
+    );
+  } catch {
+    SENTENCE_BREAK = null;
+  }
 
   function sentenceLines(text) {
+    if (!SENTENCE_BREAK) return text || "";
     return (text || "")
-      .split(SENTENCE_BREAK)
+      .replace(SENTENCE_BREAK, "$1$2\n")
+      .split("\n")
       .map(sentence => sentence.trim())
       .filter(Boolean)
       .join("\n");
@@ -767,10 +822,9 @@
       : (text || "(no speech detected)");
   }
 
-  $("oneSentencePerLine").addEventListener("change", () => {
-    renderTranscriptBody();
-    saveTranscription({ sentence_per_line: $("oneSentencePerLine").checked });
-  });
+  // Redrawing is bound now because it has to work before any settings arrive;
+  // persisting it waits, with the other controls, for the stored value.
+  $("oneSentencePerLine").addEventListener("change", renderTranscriptBody);
 
   function showResult(result, details = {}) {
     lastResult = result;
@@ -908,6 +962,17 @@
   const defaultSettingsNote = settingsNote.textContent;
 
   async function loadSettings() {
+    try {
+      await fillSettings();
+    } finally {
+      // Bound only once the stored values are in place — or known to be
+      // unreachable. A change made while the GET was still in flight saves
+      // correctly, then has the older stored value written back over it.
+      bindTranscriptionSaves();
+    }
+  }
+
+  async function fillSettings() {
     let body;
     try {
       const res = await fetch("/api/settings");
@@ -960,16 +1025,24 @@
     }).catch(() => {});
   }
 
-  ["model", "language"].forEach(id =>
-    $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).value })));
-  ["timestamps", "turbo"].forEach(id =>
-    $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).checked })));
-  let contextSaveTimer = null;
-  $("context").addEventListener("input", () => {
-    clearTimeout(contextSaveTimer);   // one write per pause, not per keystroke
-    contextSaveTimer = setTimeout(
-      () => saveTranscription({ context: $("context").value }), 600);
-  });
+  let transcriptionSavesBound = false;
+
+  function bindTranscriptionSaves() {
+    if (transcriptionSavesBound) return;
+    transcriptionSavesBound = true;
+    ["model", "language"].forEach(id =>
+      $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).value })));
+    ["timestamps", "turbo"].forEach(id =>
+      $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).checked })));
+    $("oneSentencePerLine").addEventListener("change", () =>
+      saveTranscription({ sentence_per_line: $("oneSentencePerLine").checked }));
+    let contextSaveTimer = null;
+    $("context").addEventListener("input", () => {
+      clearTimeout(contextSaveTimer);   // one write per pause, not per keystroke
+      contextSaveTimer = setTimeout(
+        () => saveTranscription({ context: $("context").value }), 600);
+    });
+  }
 
   // Two quick changes race: the first PUT's response must not overwrite the
   // second's state, and a failed save must not "restore" stale selects.
