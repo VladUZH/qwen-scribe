@@ -6,7 +6,7 @@ details when clearly documented.
 
 ## [Unreleased]
 
-## [0.2.2-beta.1] - 2026-08-06
+## [0.2.2-beta.1] - 2026-08-07
 
 Everything in this release comes from one hands-on testing report on r/macapps
 from someone who ran real video files through v0.2.1-beta.1.
@@ -16,7 +16,9 @@ from someone who ran real video files through v0.2.1-beta.1.
 - A visible transcription queue. Every job is listed in the order the worker
   will reach it, with its position while it waits, a Cancel button that stops
   a queued or running job, Retry for a failed one that does not need the file
-  uploaded again, and Open for a finished one
+  uploaded again, and Open for a finished one. Cancelling a running job says
+  it is finishing the current chunk, because a model call cannot be
+  interrupted part-way; cancelling a waiting one takes effect at once
 - A "one sentence per line" toggle on the transcript, so a long result is not
   one unbroken wall of text. Copy text and Download .txt follow the view, and
   the choice is remembered
@@ -36,6 +38,9 @@ from someone who ran real video files through v0.2.1-beta.1.
 - The web interface now says that Qwen Scribe is a menu-bar app, and that Open,
   Restart Server, and Quit live there — a tester reported being unable to find
   any way to quit or restart it
+- Vocabulary hints are capped at 2000 characters on upload, matching the limit
+  already applied to the stored setting; the hint is prepended to every chunk's
+  prompt, so its cost is paid once per chunk for the whole file
 
 ### Fixed
 
@@ -45,7 +50,16 @@ from someone who ran real video files through v0.2.1-beta.1.
   `pip install` that could not reach the app's own private environment
 - A word-timestamp failure no longer destroys the transcription. The chunk is
   retried without timestamps, the finished text is kept and saved to history,
-  and the transcript view explains why there is no `.srt`
+  and the transcript view explains why there is no `.srt`. That retry is also
+  what tells a timestamp failure apart from a failing decoder: when it fails
+  too, the job reports the real error rather than blaming the timestamps
+- Retrying a large file no longer freezes the interface. The upload was
+  copied while holding the lock that also serialises progress updates, the
+  queue view, new uploads, and shutdown, so retrying a multi-gigabyte video
+  stalled all of them for the length of the copy. Retry is also idempotent
+  now: a double click queues one job, not two
+- A job cancelled just as its last chunk finished could still complete and
+  save itself to history after the interface had already reported it stopping
 ## [0.2.1-beta.1] - 2026-08-02
 
 ### Fixed

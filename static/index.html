@@ -339,6 +339,7 @@
   <section class="queue" id="queue" aria-labelledby="queueHeading" hidden>
     <h2 id="queueHeading">Queue</h2>
     <ul class="queue-list" id="queueList"></ul>
+    <div class="job-error" id="queueError"></div>
   </section>
 
   <div class="transcript" id="transcript">
@@ -484,6 +485,9 @@
     const extension = (file.name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
     currentFile = file;
     lastResult = null;
+    // This upload owns the transcript pane again, so the live view below is
+    // free to paint into it until the user opens something else.
+    activeTranscriptId = null;
     baseName = file.name.replace(/\.[^.]+$/, "") || "transcript";
     $("job").classList.add("visible");
     $("transcript").classList.remove("visible");
@@ -492,6 +496,7 @@
     $("jobStatus").className = "job-status";
     $("jobDetail").textContent = "";
     $("jobError").textContent = "";
+    $("queueError").textContent = "";   // belongs to the click that caused it
     paintProgress(0, false);
     stopPolling();
     pollFailures = 0;
@@ -556,7 +561,18 @@
     const button = document.createElement("button");
     button.className = danger ? "act danger" : "act";
     button.textContent = label;
-    button.addEventListener("click", () => { button.disabled = true; onClick(); });
+    // Disabled for the length of the click so a second press cannot repeat the
+    // request, then restored — the row is only rebuilt when something actually
+    // changed, and Open changes nothing, so leaving it spent would kill it
+    // until the job was pruned an hour later.
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await onClick();
+      } finally {
+        button.disabled = false;
+      }
+    });
     return button;
   }
 
@@ -566,8 +582,13 @@
     // the order the single worker will actually reach it.
     const active = all.filter(job => !FINISHED.has(job.status)).reverse();
     const waiting = active.filter(job => job.status === "queued");
+    // Only a job that is actually running counts as one ahead, and between two
+    // files there is a moment when none is.
+    const running = active.length > waiting.length;
     const rows = [...active, ...all.filter(job => FINISHED.has(job.status)).slice(0, 5)];
     $("queue").hidden = rows.length === 0;
+    // The error lives inside this section; hiding it would strand the message.
+    if (rows.length === 0) $("queueError").textContent = "";
     $("queueList").replaceChildren(...rows.map(job => {
       const row = document.createElement("li");
       row.className = `queue-item ${job.status}`;
@@ -578,7 +599,7 @@
       state.className = "queue-state";
       const place = waiting.indexOf(job);
       state.textContent = job.status === "queued"
-        ? (place === 0 ? "queued — next" : `queued — ${place + 1} ahead`)
+        ? (place === 0 ? "queued — next" : `queued — ${place + (running ? 1 : 0)} ahead`)
         : (job.detail || job.status);
       row.append(name, state);
       if (job.status === "done") {
@@ -587,10 +608,16 @@
         row.append(queueButton("Open", false, () => openTranscript(job.id)));
       }
       if (!FINISHED.has(job.status)) {
-        row.append(queueButton("Cancel", true, () => act(`/api/jobs/${job.id}/cancel`)));
-      } else if (job.status === "error") {
+        const cancel = queueButton("Cancel", true, () => act(`/api/jobs/${job.id}/cancel`));
+        // The worker only reaches its next cancellation check when the current
+        // chunk returns. Leave the button spent rather than inviting a second
+        // request that changes nothing.
+        cancel.disabled = Boolean(job.cancel_requested);
+        row.append(cancel);
+      } else if (job.status === "error" && !job.retried) {
         // Only a failure keeps its upload; a cancelled job's audio is gone,
-        // so offering Retry there would be a button that cannot work.
+        // so offering Retry there would be a button that cannot work. A job
+        // already retried keeps its row, but not a button that now 409s.
         row.append(queueButton("Retry", false, () => act(`/api/jobs/${job.id}/retry`)));
       }
       return row;
@@ -598,27 +625,48 @@
   }
 
   async function act(url) {
+    let message = "";
     try {
       const res = await fetch(url, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        $("jobError").textContent = body.detail || `Request failed (${res.status})`;
+        message = body.detail || `Request failed (${res.status})`;
       }
     } catch {
-      $("jobError").textContent = "Server unreachable. Is server.py still running?";
+      message = "Server unreachable. Is server.py still running?";
     }
+    // A queue failure belongs to the queue. #jobError lives inside the upload
+    // card, which is invisible until this tab has uploaded something and
+    // describes a different job when it is not.
+    $("queueError").textContent = message;
+    // Nothing changed server-side, so the repaint below would be skipped and
+    // the button this click disabled would stay dead.
+    if (message) queueSignature = null;
     refreshQueue();
   }
 
   let seenDone = null;
+  let queueSeq = 0;
+  let queueSignature = null;
 
   async function refreshQueue() {
+    const seq = ++queueSeq;
     let jobs;
     try {
       const body = await fetch("/api/jobs").then(r => r.json());
       jobs = Array.isArray(body.jobs) ? body.jobs : [];
     } catch { return; }   // the poll loop already reports a server that is gone
-    renderQueue(jobs);
+    // An interval request already in flight when Cancel or Retry fires must
+    // not land last and repaint the queue as it was before the click.
+    if (seq !== queueSeq) return;
+    // Rebuilding an unchanged list every 1.5 s drops keyboard focus and slides
+    // rows out from under the pointer between a press and its release.
+    const signature = JSON.stringify(jobs.map(job =>
+      [job.id, job.status, job.detail, job.cancel_requested, job.retried]));
+    if (signature !== queueSignature) {
+      queueSignature = signature;
+      renderQueue(jobs);
+    }
     // A retried or background job saves its transcript without the detail
     // panel's poll loop ever seeing it, so the history list has to be told.
     const done = jobs.filter(job => job.status === "done").map(job => job.id);
@@ -660,9 +708,14 @@
     $("jobStatus").textContent = job.status;
     $("jobDetail").textContent = job.detail || "";
 
+    // Opening a saved transcript while this job runs is a deliberate act, so
+    // the pane belongs to it until the user says otherwise. Every path that
+    // writes the pane has to respect that, not just the live one.
+    const ownsTranscript = activeTranscriptId === null || activeTranscriptId === job.id;
+
     if (job.status === "processing" || job.status === "loading" || job.status === "queued") {
       paintProgress(job.progress || 0, true);
-      if (job.partial) {
+      if (job.partial && ownsTranscript) {
         $("transcript").classList.add("visible");
         $("tMeta").textContent = "live transcript — updating as chunks finish";
         lastResult = { text: job.partial, segments: null, language: null };
@@ -678,20 +731,24 @@
       $("jobStatus").classList.add("done");
       const secs = job.finished_at && job.started_at ? (job.finished_at - job.started_at).toFixed(1) : null;
       $("jobDetail").textContent = secs ? `Finished in ${secs}s` : "Finished";
-      showResult(job.result, {
-        id: job.id,
-        filename: job.filename,
-        finishedAt: job.finished_at,
-        historySaved: job.history_saved,
-        historyError: job.history_error,
-        timestampsUnavailable: job.timestamps_unavailable,
-      });
+      // Whatever the user opened stays open; the Queue row's Open button and
+      // the history list both lead to this result when they want it.
+      if (ownsTranscript) {
+        showResult(job.result, {
+          id: job.id,
+          filename: job.filename,
+          finishedAt: job.finished_at,
+          historySaved: job.history_saved,
+          historyError: job.history_error,
+          timestampsUnavailable: job.timestamps_unavailable,
+        });
+      }
       if (job.history_saved) loadHistory();
       return;
     }
     if (job.status === "error") {
       stopPolling();
-      fail(job.detail || "Transcription failed");
+      fail(job.detail || "Transcription failed", ownsTranscript);
       refreshQueue();
       return;
     }
@@ -699,7 +756,7 @@
       stopPolling();
       $("jobStatus").textContent = "cancelled";
       $("jobDetail").textContent = "Cancelled — the file was not transcribed.";
-      $("transcript").classList.remove("visible");
+      if (ownsTranscript) $("transcript").classList.remove("visible");
       paintProgress(0, false);
       refreshQueue();
       return;
@@ -710,12 +767,17 @@
     }
   }
 
-  function fail(msg) {
+  function fail(msg, ownsTranscript = true) {
     stopPolling();
     $("jobStatus").textContent = "error";
     $("jobStatus").className = "job-status error";
     $("jobError").textContent = msg;
     paintProgress(0, false);
+    // The pane may be showing a saved transcript the user opened instead of
+    // this job's live text. Relabelling that as "partial — not saved" would be
+    // a lie about a complete transcript, and hiding it would take away
+    // something this failure has nothing to do with.
+    if (!ownsTranscript) return;
     // A job that failed part-way still produced usable text. Keep it, but
     // relabel it so it can never be mistaken for a finished transcript.
     // Read the raw text, not the rendered body: the sentence-per-line view
@@ -740,21 +802,48 @@
   }
   $("model").addEventListener("change", syncTurboAvailability);
 
-  // Split after sentence-final punctuation, keeping the mark on the sentence
-  // it ends. Two cases, because Chinese and Japanese are written without
-  // spaces: an ideographic full stop is a boundary even when the next
-  // character follows it immediately, whereas an ASCII period also needs the
-  // following whitespace to tell "end." from "3.5". Requiring the next
-  // sentence not to start lowercase is what keeps "e.g. this" on one line;
-  // Qwen3-ASR's punctuation and capitalization are what make that reliable.
+  // Split after sentence-final punctuation, keeping the mark — and any closing
+  // quote or bracket belonging to it — on the sentence it ends. Two cases,
+  // because Chinese and Japanese are written without spaces: an ideographic
+  // full stop is a boundary even when the next character follows it
+  // immediately, whereas an ASCII period also needs the following whitespace
+  // to tell "end." from "3.5". Requiring the next sentence not to start
+  // lowercase is what keeps "e.g. this" on one line; Qwen3-ASR's punctuation
+  // and capitalization are what make that reliable.
   // Guards, in order: not right after an initial or a dotted abbreviation
-  // ("J. R. R.", "U.S.", "e.g.", "i.e."), and not after a common title.
-  const SENTENCE_BREAK =
-    /(?<=[。！？])(?=\S)|(?<!\b[A-Za-z]\.)(?<!\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|No|Fig|Inc|Ltd|Co)\.)(?<=[.!?。！？…])\s+(?=[^a-z])/;
+  // ("J. R. R.", "U.S.", "e.g.", "i.e."), and not after a common title. The
+  // same guards also hold back "p.m. Then" — the price of never breaking a
+  // line mid-abbreviation, which is the more visible mistake.
+  // Assembled with RegExp rather than written as a literal because a literal
+  // is parsed with the script: on an engine without lookbehind the whole
+  // interface would die rather than just this one toggle.
+  // The ideographic alternative must look ahead past a closing mark, not at
+  // any non-space: `\S` lets the closer group backtrack to empty and match
+  // before the quote instead of after it, stranding a lone ” on its own line —
+  // the exact case the group was added for.
+  const CLOSERS = String.raw`["'”’»)\]}」』】）]*`;
+  const NOT_CLOSER = String.raw`[^\s"'”’»)\]}」』】）]`;
+  let SENTENCE_BREAK = null;
+  try {
+    SENTENCE_BREAK = new RegExp(
+      String.raw`(?<=[。！？])(${CLOSERS})(?=${NOT_CLOSER})` +
+      String.raw`|(?<=[.!?。！？…])(?<!\b[A-Za-z]\.)` +
+      String.raw`(?<!\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|No|Fig|Inc|Ltd|Co)\.)` +
+      String.raw`(${CLOSERS})\s+(?=[^a-z])`,
+      "g",
+    );
+  } catch {
+    SENTENCE_BREAK = null;
+  }
 
   function sentenceLines(text) {
+    if (!SENTENCE_BREAK) return text || "";
+    // Split on a marker of our own rather than on "\n", so a line break the
+    // transcript already contained is left inside its sentence instead of
+    // being treated as another boundary.
     return (text || "")
-      .split(SENTENCE_BREAK)
+      .replace(SENTENCE_BREAK, "$1$2\u0000")
+      .split("\u0000")
       .map(sentence => sentence.trim())
       .filter(Boolean)
       .join("\n");
@@ -767,10 +856,9 @@
       : (text || "(no speech detected)");
   }
 
-  $("oneSentencePerLine").addEventListener("change", () => {
-    renderTranscriptBody();
-    saveTranscription({ sentence_per_line: $("oneSentencePerLine").checked });
-  });
+  // Redrawing is bound now because it has to work before any settings arrive;
+  // persisting it waits, with the other controls, for the stored value.
+  $("oneSentencePerLine").addEventListener("change", renderTranscriptBody);
 
   function showResult(result, details = {}) {
     lastResult = result;
@@ -908,6 +996,17 @@
   const defaultSettingsNote = settingsNote.textContent;
 
   async function loadSettings() {
+    try {
+      await fillSettings();
+    } finally {
+      // Bound only once the stored values are in place — or known to be
+      // unreachable. A change made while the GET was still in flight saves
+      // correctly, then has the older stored value written back over it.
+      bindTranscriptionSaves();
+    }
+  }
+
+  async function fillSettings() {
     let body;
     try {
       const res = await fetch("/api/settings");
@@ -944,11 +1043,16 @@
     $("language").value = stored.language;
     $("timestamps").checked = stored.timestamps;
     $("turbo").checked = stored.turbo;
-    $("context").value = stored.context;
+    // This also runs when a later save fails and resyncs everything, so an
+    // edit still inside its debounce must not be overwritten by the value it
+    // is about to replace.
+    if (contextSaveTimer === null) $("context").value = stored.context;
     $("oneSentencePerLine").checked = stored.sentence_per_line;
     // Called directly rather than by dispatching "change", which would also
     // fire the save listener and write the settings straight back on load.
+    // The redraw that listener would have triggered still has to happen.
     syncTurboAvailability();
+    renderTranscriptBody();
   }
 
   function saveTranscription(patch) {
@@ -960,16 +1064,27 @@
     }).catch(() => {});
   }
 
-  ["model", "language"].forEach(id =>
-    $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).value })));
-  ["timestamps", "turbo"].forEach(id =>
-    $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).checked })));
+  let transcriptionSavesBound = false;
+  // Module scope so a resync can tell whether an edit is still pending.
   let contextSaveTimer = null;
-  $("context").addEventListener("input", () => {
-    clearTimeout(contextSaveTimer);   // one write per pause, not per keystroke
-    contextSaveTimer = setTimeout(
-      () => saveTranscription({ context: $("context").value }), 600);
-  });
+
+  function bindTranscriptionSaves() {
+    if (transcriptionSavesBound) return;
+    transcriptionSavesBound = true;
+    ["model", "language"].forEach(id =>
+      $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).value })));
+    ["timestamps", "turbo"].forEach(id =>
+      $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).checked })));
+    $("oneSentencePerLine").addEventListener("change", () =>
+      saveTranscription({ sentence_per_line: $("oneSentencePerLine").checked }));
+    $("context").addEventListener("input", () => {
+      clearTimeout(contextSaveTimer);   // one write per pause, not per keystroke
+      contextSaveTimer = setTimeout(() => {
+        contextSaveTimer = null;
+        saveTranscription({ context: $("context").value });
+      }, 600);
+    });
+  }
 
   // Two quick changes race: the first PUT's response must not overwrite the
   // second's state, and a failed save must not "restore" stale selects.

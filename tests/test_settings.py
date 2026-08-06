@@ -32,9 +32,10 @@ class SettingsTests(unittest.TestCase):
     def test_languages_cover_every_model_language(self):
         """The picker must not hide a language the model can actually do.
 
-        The expected set is mlx_qwen3_asr.tokenizer.known_language_names().
-        It is spelled out rather than imported because CI runs without MLX;
-        re-run that call after a model upgrade to confirm it still matches.
+        Spelled out rather than imported because CI runs without MLX. That
+        makes this half of the check a guard against edits to the list, not
+        against the model changing under it — which is what the companion
+        test below is for, on machines that have the model installed.
         """
         self.assertEqual(server.LANGUAGES[0], "auto")
         self.assertEqual(
@@ -45,6 +46,19 @@ class SettingsTests(unittest.TestCase):
                 "Russian", "Spanish", "Turkish",
             ],
         )
+
+    def test_languages_match_the_installed_model(self):
+        """The one check that can actually notice a model upgrade.
+
+        Skipped where MLX is absent (CI, and any machine that has not run the
+        app yet), so the hardcoded list above stays the everyday guard.
+        """
+        try:
+            from mlx_qwen3_asr.tokenizer import known_language_names
+        except Exception as exc:   # ImportError, or MLX failing to initialize
+            self.skipTest(f"mlx_qwen3_asr is not installed here ({exc})")
+
+        self.assertEqual(sorted(server.LANGUAGES[1:]), sorted(known_language_names()))
 
     def test_defaults_and_options(self):
         body = self.client.get("/api/settings").json()
