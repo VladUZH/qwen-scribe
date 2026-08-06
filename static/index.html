@@ -281,7 +281,7 @@
     </div>
     <div class="field field-wide">
       <label for="context">Domain vocabulary <span style="text-transform:none;font-weight:400">(optional — space-separated terms, e.g. "EBITDA CapEx ESG")</span></label>
-      <input type="text" id="context" placeholder="Rare names and terms the audio contains">
+      <input type="text" id="context" maxlength="2000" placeholder="Rare names and terms the audio contains">
     </div>
   </div>
 
@@ -403,7 +403,9 @@
     pollTimer = null;
   };
 
-  fetch("/api/config").then(r => r.json()).then(cfg => {
+  // Held so loadSettings can wait for it: applying a stored language to an
+  // unpopulated <select> is a silent no-op.
+  const configReady = fetch("/api/config").then(r => r.json()).then(cfg => {
     const sel = $("language");
     cfg.languages.forEach(l => {
       const o = document.createElement("option");
@@ -577,11 +579,12 @@
     }
   }
 
-  $("model").addEventListener("change", () => {
+  function syncTurboAvailability() {
     const is06 = $("model").value === "0.6b";
     $("turbo").disabled = is06;
     $("turboWrap").style.opacity = is06 ? 0.4 : 1;
-  });
+  }
+  $("model").addEventListener("change", syncTurboAvailability);
 
   function showResult(result, details = {}) {
     lastResult = result;
@@ -738,7 +741,43 @@
     fill($("setLanguage"), body.options.languages, body.dictation.language);
     $("dictationKey").textContent = HOTKEY_LABELS[body.dictation.hotkey] || "Right ⌘";
     $("dictationSettings").hidden = false;
+    await configReady.catch(() => {});
+    applyTranscriptionSettings(body.transcription);
   }
+
+  // ── Transcription options (persisted server-side, like the dictation ones,
+  //    so they survive a cleared browser cache and a different browser) ──
+  function applyTranscriptionSettings(stored) {
+    if (!stored) return;
+    $("model").value = stored.model;
+    $("language").value = stored.language;
+    $("timestamps").checked = stored.timestamps;
+    $("turbo").checked = stored.turbo;
+    $("context").value = stored.context;
+    // Called directly rather than by dispatching "change", which would also
+    // fire the save listener and write the settings straight back on load.
+    syncTurboAvailability();
+  }
+
+  function saveTranscription(patch) {
+    // A failed save must never block transcribing, so this is fire-and-forget.
+    fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcription: patch }),
+    }).catch(() => {});
+  }
+
+  ["model", "language"].forEach(id =>
+    $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).value })));
+  ["timestamps", "turbo"].forEach(id =>
+    $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).checked })));
+  let contextSaveTimer = null;
+  $("context").addEventListener("input", () => {
+    clearTimeout(contextSaveTimer);   // one write per pause, not per keystroke
+    contextSaveTimer = setTimeout(
+      () => saveTranscription({ context: $("context").value }), 600);
+  });
 
   // Two quick changes race: the first PUT's response must not overwrite the
   // second's state, and a failed save must not "restore" stale selects.

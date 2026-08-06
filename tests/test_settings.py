@@ -26,7 +26,8 @@ class SettingsTests(unittest.TestCase):
         # The settings dict is module state; restore it whatever the test did.
         original = copy.deepcopy(server._settings)
         self.addCleanup(lambda: server._settings.update(copy.deepcopy(original)))
-        server._settings["dictation"] = dict(server.DEFAULT_SETTINGS["dictation"])
+        for section, values in server.DEFAULT_SETTINGS.items():
+            server._settings[section] = dict(values)
 
     def test_languages_cover_every_model_language(self):
         """The picker must not hide a language the model can actually do.
@@ -54,6 +55,72 @@ class SettingsTests(unittest.TestCase):
         )
         self.assertEqual(body["options"]["models"], list(server.MODELS.keys()))
         self.assertEqual(body["options"]["languages"], server.LANGUAGES)
+
+    def test_transcription_defaults(self):
+        body = self.client.get("/api/settings").json()
+        self.assertEqual(
+            body["transcription"],
+            {
+                "model": server.DEFAULT_MODEL,
+                "language": "auto",
+                "timestamps": False,
+                "turbo": False,
+                "context": "",
+            },
+        )
+
+    def test_transcription_settings_round_trip(self):
+        body = self.client.put(
+            "/api/settings",
+            json={"transcription": {"language": "Korean", "timestamps": True}},
+        ).json()
+        self.assertEqual(body["transcription"]["language"], "Korean")
+        self.assertTrue(body["transcription"]["timestamps"])
+        # Untouched fields survive a partial update.
+        self.assertEqual(body["transcription"]["model"], server.DEFAULT_MODEL)
+        # And what a restarted server would load matches.
+        reloaded = server._load_settings()["transcription"]
+        self.assertEqual(reloaded["language"], "Korean")
+        self.assertTrue(reloaded["timestamps"])
+
+    def test_updating_one_section_leaves_the_other_alone(self):
+        self.client.put("/api/settings", json={"transcription": {"language": "Korean"}})
+        body = self.client.put(
+            "/api/settings", json={"dictation": {"hotkey": "right_option"}}
+        ).json()
+        self.assertEqual(body["dictation"]["hotkey"], "right_option")
+        self.assertEqual(body["transcription"]["language"], "Korean")
+
+    def test_transcription_rejects_bad_values(self):
+        for payload in (
+            {"transcription": {"language": "Klingon"}},
+            {"transcription": {"model": "70b"}},
+            {"transcription": {"timestamps": "yes"}},
+            {"transcription": {"turbo": 1}},
+            {"transcription": {"nope": 1}},
+            {"transcription": {"context": "x" * (server.MAX_CONTEXT_CHARS + 1)}},
+            {"transcription": "fast"},
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual(
+                    self.client.put("/api/settings", json=payload).status_code, 400
+                )
+        self.assertFalse(server.SETTINGS_FILE.exists())
+
+    def test_unknown_section_is_rejected(self):
+        self.assertEqual(
+            self.client.put("/api/settings", json={"telemetry": {"on": True}}).status_code,
+            400,
+        )
+
+    def test_bad_stored_transcription_field_does_not_lose_the_others(self):
+        server.SETTINGS_FILE.write_text(
+            '{"transcription": {"language": "Korean", "model": "does-not-exist"}}',
+            encoding="utf-8",
+        )
+        loaded = server._load_settings()["transcription"]
+        self.assertEqual(loaded["language"], "Korean")          # good -> kept
+        self.assertEqual(loaded["model"], server.DEFAULT_MODEL)  # bad -> default
 
     def test_partial_update_persists_and_survives_reload(self):
         response = self.client.put(

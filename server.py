@@ -159,32 +159,69 @@ SETTINGS_FILE = APP_DATA_DIR / "settings.json"
 settings_lock = threading.Lock()
 
 DEFAULT_SETTINGS = {
+    # Polled and applied by the native dictation helper.
     "dictation": {
         "hotkey": "right_command",
         "model": DEFAULT_MODEL,
         "language": "auto",
     },
+    # The file-transcription pane's choices. Kept on the server rather than in
+    # the browser so they survive a cleared cache and a different browser.
+    "transcription": {
+        "model": DEFAULT_MODEL,
+        "language": "auto",
+        "timestamps": False,
+        "turbo": False,
+        "context": "",
+    },
 }
 
-_SETTING_VALIDATORS = {
-    "hotkey": DICTATION_HOTKEYS,
-    "model": MODELS,
-    "language": LANGUAGES,
+MAX_CONTEXT_CHARS = 2000
+
+
+def _one_of(allowed):
+    # The isinstance check matters: a list/dict value would raise TypeError
+    # (unhashable) from the membership test, not ValueError.
+    return lambda value: isinstance(value, str) and value in allowed
+
+
+def _boolean(value) -> bool:
+    return isinstance(value, bool)
+
+
+def _short_text(value) -> bool:
+    return isinstance(value, str) and len(value) <= MAX_CONTEXT_CHARS
+
+
+# Per-section, per-key value validators. A key absent from its section's map
+# is rejected outright, so a typo can never be silently persisted.
+_SECTION_VALIDATORS = {
+    "dictation": {
+        "hotkey": _one_of(DICTATION_HOTKEYS),
+        "model": _one_of(MODELS),
+        "language": _one_of(LANGUAGES),
+    },
+    "transcription": {
+        "model": _one_of(MODELS),
+        "language": _one_of(LANGUAGES),
+        "timestamps": _boolean,
+        "turbo": _boolean,
+        "context": _short_text,
+    },
 }
 
 
-def _validated_dictation(candidate: object, base: dict) -> dict:
+def _validated_section(section: str, candidate: object, base: dict) -> dict:
     """Merge candidate onto base, rejecting unknown keys and values."""
+    validators = _SECTION_VALIDATORS[section]
     merged = dict(base)
     if not isinstance(candidate, dict):
-        raise ValueError("'dictation' must be an object")
+        raise ValueError(f"'{section}' must be an object")
     for key, value in candidate.items():
-        allowed = _SETTING_VALIDATORS.get(key)
-        if allowed is None:
-            raise ValueError(f"Unknown dictation setting '{key}'")
-        # The isinstance check matters: a list/dict value would raise
-        # TypeError (unhashable) from the membership test, not ValueError.
-        if not isinstance(value, str) or value not in allowed:
+        check = validators.get(key)
+        if check is None:
+            raise ValueError(f"Unknown {section} setting '{key}'")
+        if not check(value):
             raise ValueError(f"Invalid value for '{key}': {value!r}")
         merged[key] = value
     return merged
@@ -192,18 +229,23 @@ def _validated_dictation(candidate: object, base: dict) -> dict:
 
 def _load_settings() -> dict:
     """Read settings from disk, falling back field by field to the defaults."""
-    settings = {"dictation": dict(DEFAULT_SETTINGS["dictation"])}
+    settings = {name: dict(values) for name, values in DEFAULT_SETTINGS.items()}
     try:
         stored = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return settings
-    if isinstance(stored, dict) and isinstance(stored.get("dictation"), dict):
+    if not isinstance(stored, dict):
+        return settings
+    for section in DEFAULT_SETTINGS:
+        section_values = stored.get(section)
+        if not isinstance(section_values, dict):
+            continue
         # Field by field: one hand-edited bad value must not take the server
         # down or discard the other stored settings.
-        for key, value in stored["dictation"].items():
+        for key, value in section_values.items():
             try:
-                settings["dictation"] = _validated_dictation(
-                    {key: value}, settings["dictation"]
+                settings[section] = _validated_section(
+                    section, {key: value}, settings[section]
                 )
             except ValueError:
                 continue
@@ -574,9 +616,9 @@ def config() -> dict:
 
 def _settings_response() -> dict:
     with settings_lock:
-        dictation = dict(_settings["dictation"])
+        sections = {name: dict(_settings[name]) for name in DEFAULT_SETTINGS}
     return {
-        "dictation": dictation,
+        **sections,
         "options": {
             "hotkeys": [
                 {"id": key, "label": label} for key, label in DICTATION_HOTKEYS.items()
@@ -595,19 +637,27 @@ def get_settings() -> dict:
 @app.put("/api/settings")
 def update_settings(payload: dict) -> dict:
     with settings_lock:
+        # Validate every section before committing any of them, so a bad value
+        # in one cannot half-apply the payload.
         try:
-            merged = _validated_dictation(
-                payload.get("dictation", {}), _settings["dictation"]
-            )
+            unknown = set(payload) - set(DEFAULT_SETTINGS)
+            if unknown:
+                raise ValueError(f"Unknown settings section '{sorted(unknown)[0]}'")
+            merged = {
+                name: _validated_section(name, payload[name], _settings[name])
+                if name in payload
+                else dict(_settings[name])
+                for name in DEFAULT_SETTINGS
+            }
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         # Persist first, then commit to memory: a failed write must not leave
         # a live value the dictation helper applies but a restart forgets.
         try:
-            _save_settings({"dictation": merged})
+            _save_settings(merged)
         except OSError as exc:
             raise HTTPException(500, f"Could not save settings: {exc}") from exc
-        _settings["dictation"] = merged
+        _settings.update(merged)
     return _settings_response()
 
 

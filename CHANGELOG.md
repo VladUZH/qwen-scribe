@@ -8,6 +8,10 @@ details when clearly documented.
 
 ### Added
 
+- The file-transcription choices — model, language, word timestamps, turbo,
+  and vocabulary hints — are now remembered. They are stored by the server
+  alongside the dictation settings, so they survive a reload, a restart, a
+  cleared browser cache, and a different browser
 - All fourteen languages Qwen3-ASR supports are now selectable — Arabic,
   Chinese, Dutch, Hindi, Japanese, Korean, Portuguese, and Turkish join the
   six that were already listed
