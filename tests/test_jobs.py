@@ -4,6 +4,7 @@ No model is ever loaded: the worker is replaced with a double, so these tests
 run on any machine, with or without MLX.
 """
 
+import json
 import sys
 import tempfile
 import threading
@@ -48,6 +49,8 @@ class WorkerTestCase(unittest.TestCase):
 
     def setUp(self):
         self.addCleanup(server.jobs.clear)
+        self.addCleanup(server.job_futures.clear)
+        self.addCleanup(server.retries_staging.clear)
         transcripts = tempfile.TemporaryDirectory()
         self.addCleanup(transcripts.cleanup)
         directory = mock.patch.object(server, "TRANSCRIPTS_DIR", Path(transcripts.name))
@@ -387,24 +390,29 @@ class TimestampFallbackTests(WorkerTestCase):
         """A dead decoder is not the aligner's fault.
 
         Retrying without timestamps is how the two are told apart: if that
-        retry fails too, the timestamps were never the problem, and reporting
-        one would end the job promising a complete transcript it never made.
+        retry fails too, the timestamps were never the problem, and the second
+        failure — not the aligner's — is what actually killed the job.
         """
 
         class DeadSession:
             def transcribe(self, audio, **kwargs):
+                if kwargs.get("return_timestamps"):
+                    raise RuntimeError("soynlp is missing")
                 raise RuntimeError("Metal device lost")
 
         job = self.run_worker(DeadSession(), timestamps=True)
 
         self.assertEqual(job["status"], "error")
         self.assertIn("Metal device lost", job["detail"])
+        self.assertNotIn("soynlp", job["detail"])
         self.assertIsNone(job.get("timestamps_unavailable"))
 
-    def test_a_later_chunk_failure_discards_the_earlier_timestamps(self):
+    def test_a_later_chunk_failure_leaves_no_half_length_subtitles(self):
         """Half a file's word timestamps are worse than none.
 
-        The .srt would end at the last aligned chunk with nothing saying so.
+        The .srt would stop at the last aligned chunk with nothing saying so,
+        which is why the earlier chunks' segments go as well. Checked on the
+        saved transcript too — that file is what an .srt is exported from.
         """
         aligned = []
 
@@ -425,6 +433,11 @@ class TimestampFallbackTests(WorkerTestCase):
         self.assertEqual(job["result"]["text"], "first second")
         self.assertIsNone(job["result"]["segments"])
         self.assertIn("aligner asset missing", job["timestamps_unavailable"])
+        saved = json.loads(
+            next(server.TRANSCRIPTS_DIR.glob("*.json")).read_text(encoding="utf-8")
+        )
+        self.assertIsNone(saved["result"]["segments"])
+        self.assertEqual(saved["result"]["text"], "first second")
 
 
 class QueueControlTests(WorkerTestCase):
@@ -580,8 +593,11 @@ class QueueControlTests(WorkerTestCase):
             finish_copy.set()
 
         helper = threading.Thread(target=retry_during_the_copy)
-        helper.start()
+        # Registered before the thread exists, so a failure below cannot leave
+        # it blocked on an event nothing will ever set.
+        self.addCleanup(helper.join, 5)
         self.addCleanup(finish_copy.set)
+        helper.start()
         with mock.patch.object(server.shutil, "copyfile", slow_copy):
             first = self.client.post(f"/api/jobs/{job_id}/retry")
         helper.join(timeout=5)
@@ -590,6 +606,51 @@ class QueueControlTests(WorkerTestCase):
         self.assertEqual(second.get("status"), 409)
         self.assertEqual(self.submit.call_count, 1)
         self.assertEqual(server.retries_staging, set())
+
+    def test_a_failure_after_the_copy_still_releases_the_retry_claim(self):
+        """A claim that outlives its request makes the job un-retryable for
+        good — there is nothing in the interface that can take it back."""
+        job_id = self.stage_job(status="error")
+
+        with mock.patch.object(
+            server, "_prune_jobs_locked", side_effect=PermissionError("read-only")
+        ), self.assertRaises(PermissionError):
+            self.client.post(f"/api/jobs/{job_id}/retry")
+
+        self.assertEqual(server.retries_staging, set())
+        self.assertIsNone(server.jobs[job_id].get("retried_as"))
+        self.assertEqual(sorted(server.UPLOAD_DIR.iterdir()),
+                         [Path(server.jobs[job_id]["path"])])
+        self.assertEqual(self.client.post(f"/api/jobs/{job_id}/retry").status_code, 200)
+
+    def test_a_vanished_upload_asks_for_a_re_upload_even_if_it_vanishes_late(self):
+        """The check and the copy are no longer one atomic step, so the answer
+        must be the same whichever side of the gap the file disappears on."""
+        job_id = self.stage_job(status="error")
+
+        with mock.patch.object(
+            server.shutil, "copyfile", side_effect=FileNotFoundError("gone")
+        ):
+            response = self.client.post(f"/api/jobs/{job_id}/retry")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("upload it again", response.json()["detail"])
+        self.assertIsNone(server.jobs[job_id].get("retried_as"))
+
+    def test_the_retried_flag_lifts_once_the_retry_is_forgotten(self):
+        """The browser hides Retry on this flag, so it has to track the same
+        thing the 409 does rather than a fact that is true forever."""
+        job_id = self.stage_job(status="error")
+        retry_id = self.client.post(f"/api/jobs/{job_id}/retry").json()["id"]
+
+        listed = {job["id"]: job for job in self.client.get("/api/jobs").json()["jobs"]}
+        self.assertTrue(listed[job_id]["retried"])
+        self.assertNotIn("retried_as", listed[job_id])
+
+        server.jobs.pop(retry_id)   # as the remembered-job cap would
+        listed = {job["id"]: job for job in self.client.get("/api/jobs").json()["jobs"]}
+        self.assertFalse(listed[job_id]["retried"])
+        self.assertEqual(self.client.post(f"/api/jobs/{job_id}/retry").status_code, 200)
 
     def test_a_retry_that_cannot_be_staged_leaves_the_job_retryable(self):
         """A full disk must not consume the one retry the job had."""
@@ -665,6 +726,99 @@ class QueueControlTests(WorkerTestCase):
         self.assertIsNone(job["result"])
         self.assertEqual(list(server.TRANSCRIPTS_DIR.glob("*.json")), [])
         self.assertFalse(Path(job["path"]).exists())
+
+    def test_a_cancel_while_loading_the_model_never_reaches_the_gpu(self):
+        """Loading can download gigabytes of weights for a job nobody wants."""
+        self.install_audio_stubs(chunks=1)
+        job_id = self.stage_job()
+        real_update = server._update
+
+        def cancel_once_loading(target, **fields):
+            real_update(target, **fields)
+            if fields.get("status") == "loading":
+                server.jobs[target]["cancelled"].set()
+
+        with mock.patch.object(server, "_update", side_effect=cancel_once_loading), \
+                mock.patch.object(server, "get_session") as get_session:
+            server._run_job(job_id)
+
+        get_session.assert_not_called()
+        self.assertEqual(server.jobs[job_id]["status"], "cancelled")
+
+    def test_a_cancel_while_decoding_audio_is_not_announced_as_transcribing(self):
+        """Decoding a 4 GB video is minutes long and cannot be interrupted, so
+        a cancel that arrived during it has already waited long enough. The
+        chunk loop would stop it anyway; what this pins down is that the job is
+        never announced as transcribing first, and never split into chunks.
+        """
+        job_id = None
+        transcribed = []
+        statuses = []
+        real_update = server._update
+
+        class CountingSession:
+            def transcribe(inner, audio, **kwargs):
+                transcribed.append(1)
+                return FakeResult()
+
+        def record_status(target, **fields):
+            if "status" in fields:
+                statuses.append(fields["status"])
+            real_update(target, **fields)
+
+        self.install_audio_stubs(chunks=2)
+        job_id = self.stage_job()
+        audio_module = sys.modules["mlx_qwen3_asr.audio"]
+        decode = audio_module.load_audio_np
+
+        def cancel_while_decoding(path, sr=SAMPLE_RATE):
+            server.jobs[job_id]["cancelled"].set()
+            return decode(path, sr)
+
+        audio_module.load_audio_np = cancel_while_decoding
+        with mock.patch.object(server, "get_session", return_value=CountingSession()), \
+                mock.patch.object(server, "_update", side_effect=record_status):
+            server._run_job(job_id)
+
+        self.assertEqual(transcribed, [])
+        self.assertEqual(server.jobs[job_id]["status"], "cancelled")
+        self.assertNotIn("processing", statuses)
+
+    def test_an_error_raised_after_a_cancel_is_reported_as_the_cancel(self):
+        """Reporting a failure the user caused — and keeping the upload staged
+        for a retry they never asked for — is just noise."""
+        job_id = None
+
+        class FailsOnceCancelled:
+            def transcribe(inner, audio, **kwargs):
+                server.jobs[job_id]["cancelled"].set()
+                raise RuntimeError("Metal device lost")
+
+        self.install_audio_stubs(chunks=1)
+        job_id = self.stage_job()
+        with mock.patch.object(server, "get_session", return_value=FailsOnceCancelled()):
+            server._run_job(job_id)
+
+        job = server.jobs[job_id]
+        self.assertEqual(job["status"], "cancelled")
+        self.assertEqual(job["detail"], "Cancelled")
+        self.assertFalse(Path(job["path"]).exists())
+
+    def test_the_cancelling_notice_outlives_the_workers_progress_updates(self):
+        """It is the only thing telling the user their cancel was accepted."""
+        job_id = self.stage_job(
+            status="processing",
+            cancel_requested=True,
+            detail="Cancelling — finishing the current chunk",
+        )
+
+        server._update(job_id, detail="Chunk 3/40", progress=0.075)
+
+        self.assertIn("Cancelling", server.jobs[job_id]["detail"])
+        self.assertEqual(server.jobs[job_id]["progress"], 0.075)
+        # A terminal update still gets the last word.
+        server._update(job_id, status="cancelled", detail="Cancelled")
+        self.assertEqual(server.jobs[job_id]["detail"], "Cancelled")
 
     def test_the_worker_ignores_a_job_that_was_already_forgotten(self):
         """Cancelling while queued makes a job terminal, so the 50-job cap can

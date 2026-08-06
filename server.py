@@ -159,9 +159,11 @@ jobs: dict[str, dict] = {}
 job_futures: dict[str, Future] = {}
 jobs_lock = threading.Lock()
 
-# Never sent to the browser: the staged upload path, and a threading.Event
-# that is not JSON-serialisable anyway.
-_PRIVATE_JOB_FIELDS = {"path", "cancelled"}
+# Never sent to the browser: the staged upload path, a threading.Event that is
+# not JSON-serialisable anyway, and the retry's id — the browser is given
+# whether that retry is still outstanding instead, so its Retry button and this
+# module's 409 can never disagree about it.
+_PRIVATE_JOB_FIELDS = {"path", "cancelled", "retried_as"}
 
 # Per-run fields a retry must not inherit from the job it repeats. Everything
 # else — the filename, model, language, timestamps, turbo, vocabulary — is
@@ -184,8 +186,20 @@ class _JobCancelled(Exception):
     """Raised inside the worker when the user cancels a running job."""
 
 
+def _retry_outstanding(job: dict) -> bool:
+    """Whether this job's retry is still around. Caller must hold jobs_lock.
+
+    A retry that has since been forgotten leaves the job retryable again, so
+    the answer has to be computed rather than stored.
+    """
+    pending = job.get("retried_as")
+    return pending is not None and (pending in jobs or pending in retries_staging)
+
+
 def _public_job(job: dict) -> dict:
-    return {key: value for key, value in job.items() if key not in _PRIVATE_JOB_FIELDS}
+    public = {key: value for key, value in job.items() if key not in _PRIVATE_JOB_FIELDS}
+    public["retried"] = _retry_outstanding(job)
+    return public
 
 # Updated by the optional native macOS helper. The web UI uses this to show
 # whether right-Command desktop dictation is running and which macOS permission
@@ -442,6 +456,12 @@ def _update(job_id: str, **fields) -> None:
         # job that shutdown already marked as failed.
         if job is None or job.get("status") in TERMINAL_JOB_STATUSES:
             return
+        # Once a cancel is pending, the worker's running commentary must not
+        # paint over the one line telling the user it was accepted. It cannot
+        # stop until the current step returns, and that step can be a
+        # multi-minute ffmpeg decode.
+        if job.get("cancel_requested") and fields.get("status") not in TERMINAL_JOB_STATUSES:
+            fields.pop("detail", None)
         if fields.get("status") in TERMINAL_JOB_STATUSES:
             fields.setdefault("finished_at", time.time())
         job.update(fields)
@@ -547,6 +567,13 @@ def _run_job(job_id: str) -> None:
 
         SR = 16000
         audio = load_audio_np(str(path), sr=SR)  # ffmpeg handles video too
+        # Decoding a 4 GB video takes minutes and cannot be interrupted, so a
+        # cancel that arrived during it has been waiting all that time. Check
+        # before starting on the GPU rather than at the first chunk boundary.
+        if cancelled.is_set():
+            raise _JobCancelled
+        if stopping.is_set():
+            raise RuntimeError("Server stopped before this job finished")
         total_sec = len(audio) / SR
         chunks = split_audio_into_chunks(audio, SR, 30.0)  # energy-minima splits
 
@@ -591,16 +618,17 @@ def _run_job(job_id: str) -> None:
                     raise _JobCancelled from exc
                 if stopping.is_set():
                     raise RuntimeError("Server stopped before this job finished") from exc
-                try:
-                    result = session.transcribe(
-                        chunk_audio, **{**kwargs, "return_timestamps": False}
-                    )
-                except Exception:
-                    raise exc
+                # Deliberately unguarded. If this fails too then the timestamps
+                # were never the problem, and its failure — not the aligner's —
+                # is the one that killed the job and the one worth reporting.
+                result = session.transcribe(
+                    chunk_audio, **{**kwargs, "return_timestamps": False}
+                )
                 # Stay timestamp-free for the rest of the file, so a two-hour
-                # recording does not fail twice per chunk. Timestamps already
-                # collected go too: half an .srt ends mid-recording with
-                # nothing on screen saying where it stopped.
+                # recording does not fail twice per chunk. The segments already
+                # collected can no longer be used — a half-length .srt is worse
+                # than none — so let a long file's worth of them go now rather
+                # than carry them to the end.
                 kwargs["return_timestamps"] = False
                 segments.clear()
                 timestamps_unavailable = (
@@ -896,14 +924,15 @@ async def create_job(
         raise HTTPException(400, f"Unsupported language '{language}'")
 
     # The hint is prepended to every chunk's prompt, so its cost is paid once
-    # per chunk for the whole file. Same limit as the stored setting.
-    context = context.strip()
+    # per chunk for the whole file. Measured before stripping, so this and the
+    # stored setting's validator accept exactly the same strings.
     if len(context) > MAX_CONTEXT_CHARS:
         raise HTTPException(
             400,
             f"Vocabulary hints are limited to {MAX_CONTEXT_CHARS} characters "
             f"(received {len(context)})",
         )
+    context = context.strip()
 
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
@@ -1047,8 +1076,7 @@ def retry_job(job_id: str) -> JSONResponse:
             raise HTTPException(404, "Job not found")
         if source["status"] != "error":
             raise HTTPException(409, "Only a failed job can be retried")
-        pending = source.get("retried_as")
-        if pending is not None and (pending in jobs or pending in retries_staging):
+        if _retry_outstanding(source):
             # One worker and one GPU: a double-clicked Retry would otherwise
             # stage a second copy of the upload and transcribe it twice. Once
             # the retry is forgotten, this job may be retried afresh.
@@ -1066,51 +1094,64 @@ def retry_job(job_id: str) -> JSONResponse:
                      if key not in _RESET_ON_RETRY}
 
     destination = UPLOAD_DIR / f"{new_id}{original.suffix}"
-    try:
-        # Deliberately outside jobs_lock: the upload can be 4 GB, and the
-        # running job's progress, the queue view, new uploads, and shutdown all
-        # wait on that lock. copyfile rather than copy2 so the staged copy gets
-        # its own mtime — inheriting the original's would expose it to the
-        # startup sweep that deletes uploads older than a day.
-        shutil.copyfile(original, destination)
-    except OSError as exc:
-        destination.unlink(missing_ok=True)
-        with jobs_lock:
-            _release_retry_claim(job_id, new_id)
-        raise HTTPException(500, f"Could not stage the file for a retry: {exc}") from exc
-
     submit_error: BaseException | None = None
     future: Future | None = None
-    with jobs_lock:
-        _prune_jobs_locked()
-        jobs[new_id] = {
-            **inherited,
-            "id": new_id,
-            "status": "queued",
-            "detail": "Queued",
-            "progress": 0.0,
-            "partial": None,
-            "result": None,
-            "path": str(destination),
-            "cancelled": threading.Event(),
-            "created_at": time.time(),
-        }
-        # Same ordering as create_job: register the Future under the lock so
-        # shutdown cleanup cannot miss a worker that starts immediately.
+    registered = False
+    try:
         try:
-            future = executor.submit(_run_job, new_id)
-            job_futures[new_id] = future
-        except BaseException as exc:
-            jobs.pop(new_id, None)
-            _release_retry_claim(job_id, new_id)
-            submit_error = exc
-        else:
-            # Registered in `jobs` now, which is what the next Retry collides
-            # with; the claim has done its job.
-            retries_staging.discard(new_id)
+            # Deliberately outside jobs_lock: the upload can be 4 GB, and the
+            # running job's progress, the queue view, new uploads, and shutdown
+            # all wait on that lock. copyfile rather than copy2 because the
+            # staged copy wants its own mtime, not the original's.
+            shutil.copyfile(original, destination)
+        except FileNotFoundError as exc:
+            # The source job was forgotten between the check above and here,
+            # taking its upload with it. That is the same situation the check
+            # reports, so give the same answer rather than a bare 500.
+            raise HTTPException(
+                404, "The uploaded file is no longer available — upload it again"
+            ) from exc
+        except OSError as exc:
+            raise HTTPException(
+                500, f"Could not stage the file for a retry: {exc}"
+            ) from exc
+
+        with jobs_lock:
+            _prune_jobs_locked()
+            jobs[new_id] = {
+                **inherited,
+                "id": new_id,
+                "status": "queued",
+                "detail": "Queued",
+                "progress": 0.0,
+                "partial": None,
+                "result": None,
+                "path": str(destination),
+                "cancelled": threading.Event(),
+                "created_at": time.time(),
+            }
+            # Same ordering as create_job: register the Future under the lock so
+            # shutdown cleanup cannot miss a worker that starts immediately.
+            try:
+                future = executor.submit(_run_job, new_id)
+                job_futures[new_id] = future
+            except BaseException as exc:
+                jobs.pop(new_id, None)
+                submit_error = exc
+            else:
+                # In `jobs` now, which is what the next Retry collides with.
+                registered = True
+                retries_staging.discard(new_id)
+    finally:
+        # Anything that got here without registering — a failed copy, a refused
+        # submission, an error from pruning — must give the claim back. Leaving
+        # it would make this job permanently un-retryable and strand the copy.
+        if not registered:
+            destination.unlink(missing_ok=True)
+            with jobs_lock:
+                _release_retry_claim(job_id, new_id)
 
     if submit_error is not None:
-        destination.unlink(missing_ok=True)
         if isinstance(submit_error, RuntimeError):
             raise HTTPException(503, "The transcription worker is stopping") from submit_error
         raise submit_error
