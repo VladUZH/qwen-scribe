@@ -219,6 +219,15 @@
   .history-title { display: flex; align-items: baseline; gap: 9px; }
   .history h2 { font-size: 16px; font-weight: 600; }
   .history-count { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); }
+  .queue { margin-top: 22px; }
+  .queue h2 { font-size: 16px; font-weight: 600; margin-bottom: 11px; }
+  .queue-list { display: grid; gap: 8px; list-style: none; }
+  .queue-item { display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 11px 14px; }
+  .queue-name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; flex: 1 1 auto; min-width: 0; }
+  .queue-state { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); text-align: right; flex: 0 1 auto; overflow-wrap: anywhere; }
+  .queue-item.done .queue-state { color: var(--ok); }
+  .queue-item.error .queue-state { color: var(--err); }
+  .queue-item .act { padding: 5px 10px; font-size: 11.5px; flex: none; }
   .history-list { display: grid; gap: 10px; }
   .history-empty { color: var(--muted); font-size: 13px; text-align: center; background: var(--panel); border: 1px dashed var(--line); border-radius: var(--radius); padding: 28px 18px; }
   .history-item { background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 15px 16px; }
@@ -237,6 +246,8 @@
     .t-head { flex-direction: column; align-items: flex-start; gap: 10px; }
     .dictation { align-items: flex-start; }
     .dictation-status { display: none; }
+    .queue-item { flex-wrap: wrap; }
+    .queue-state { text-align: left; }
     .history-item-head, .history-foot { align-items: flex-start; }
     .history-foot { flex-direction: column; }
     .history-head { flex-direction: column; align-items: flex-start; }
@@ -319,6 +330,11 @@
     <div class="job-detail" id="jobDetail"></div>
     <div class="job-error" id="jobError"></div>
   </div>
+
+  <section class="queue" id="queue" aria-labelledby="queueHeading" hidden>
+    <h2 id="queueHeading">Queue</h2>
+    <ul class="queue-list" id="queueList"></ul>
+  </section>
 
   <div class="transcript" id="transcript">
     <div class="t-head">
@@ -488,8 +504,89 @@
       return fail(body.detail || `Upload failed (${res.status})`);
     }
     const { id } = await res.json();
+    refreshQueue();
     if (seq !== submissionSeq) return;
     pollTimer = setInterval(() => poll(id, seq), 800);
+  }
+
+  // ── Queue ─────────────────────────────────────────────────────────────
+  // One worker means a second file genuinely waits its turn, so the queue has
+  // to be visible: otherwise "queued" is indistinguishable from "stuck", and
+  // the detail panel above only ever tracks the most recent upload.
+  const FINISHED = new Set(["done", "error", "cancelled"]);
+
+  function queueButton(label, danger, onClick) {
+    const button = document.createElement("button");
+    button.className = danger ? "act danger" : "act";
+    button.textContent = label;
+    button.addEventListener("click", () => { button.disabled = true; onClick(); });
+    return button;
+  }
+
+  function renderQueue(all) {
+    // The listing arrives newest-first, which is right for the finished tail
+    // but backwards for the queue: unfinished work is shown, and numbered, in
+    // the order the single worker will actually reach it.
+    const active = all.filter(job => !FINISHED.has(job.status)).reverse();
+    const waiting = active.filter(job => job.status === "queued");
+    const rows = [...active, ...all.filter(job => FINISHED.has(job.status)).slice(0, 5)];
+    $("queue").hidden = rows.length === 0;
+    $("queueList").replaceChildren(...rows.map(job => {
+      const row = document.createElement("li");
+      row.className = `queue-item ${job.status}`;
+      const name = document.createElement("span");
+      name.className = "queue-name";
+      name.textContent = job.filename || "(unnamed)";
+      const state = document.createElement("span");
+      state.className = "queue-state";
+      const place = waiting.indexOf(job);
+      state.textContent = job.status === "queued"
+        ? (place === 0 ? "queued — next" : `queued — ${place + 1} ahead`)
+        : (job.detail || job.status);
+      row.append(name, state);
+      if (job.status === "done") {
+        // A retried or background job finishes outside the detail panel's
+        // poll loop, so this is the only way to reach its transcript.
+        row.append(queueButton("Open", false, () => openTranscript(job.id)));
+      }
+      if (!FINISHED.has(job.status)) {
+        row.append(queueButton("Cancel", true, () => act(`/api/jobs/${job.id}/cancel`)));
+      } else if (job.status === "error") {
+        // Only a failure keeps its upload; a cancelled job's audio is gone,
+        // so offering Retry there would be a button that cannot work.
+        row.append(queueButton("Retry", false, () => act(`/api/jobs/${job.id}/retry`)));
+      }
+      return row;
+    }));
+  }
+
+  async function act(url) {
+    try {
+      const res = await fetch(url, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        $("jobError").textContent = body.detail || `Request failed (${res.status})`;
+      }
+    } catch {
+      $("jobError").textContent = "Server unreachable. Is server.py still running?";
+    }
+    refreshQueue();
+  }
+
+  let seenDone = null;
+
+  async function refreshQueue() {
+    let jobs;
+    try {
+      const body = await fetch("/api/jobs").then(r => r.json());
+      jobs = Array.isArray(body.jobs) ? body.jobs : [];
+    } catch { return; }   // the poll loop already reports a server that is gone
+    renderQueue(jobs);
+    // A retried or background job saves its transcript without the detail
+    // panel's poll loop ever seeing it, so the history list has to be told.
+    const done = jobs.filter(job => job.status === "done").map(job => job.id);
+    if (seenDone && done.some(id => !seenDone.has(id))) loadHistory();
+    seenDone = new Set(done);
   }
 
   // Give up rather than hammer a server that is gone, but tolerate the brief
@@ -550,6 +647,16 @@
     if (job.status === "error") {
       stopPolling();
       fail(job.detail || "Transcription failed");
+      refreshQueue();
+      return;
+    }
+    if (job.status === "cancelled") {
+      stopPolling();
+      $("jobStatus").textContent = "cancelled";
+      $("jobDetail").textContent = "Cancelled — the file was not transcribed.";
+      $("transcript").classList.remove("visible");
+      paintProgress(0, false);
+      refreshQueue();
       return;
     }
     if (!["queued", "loading", "processing", "done"].includes(job.status)) {
@@ -960,6 +1067,10 @@
 
   loadSettings();
   loadHistory();
+  refreshQueue();
+  // Cheap localhost GET; keeps the queue honest when a job is cancelled or
+  // queued from another tab, and when the detail panel is not polling.
+  setInterval(refreshQueue, 1500);
   refreshDictationStatus();
   setInterval(refreshDictationStatus, 5000);
 })();

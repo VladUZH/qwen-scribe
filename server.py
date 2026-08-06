@@ -140,6 +140,31 @@ def get_session(model_key: str):
 jobs: dict[str, dict] = {}
 jobs_lock = threading.Lock()
 
+# Never sent to the browser: the staged upload path, and a threading.Event
+# that is not JSON-serialisable anyway.
+_PRIVATE_JOB_FIELDS = {"path", "cancelled"}
+
+# Terminal states. A job in one of these is safe to evict and cannot be
+# cancelled; only "error" and "cancelled" can be retried.
+_FINISHED_STATUSES = {"done", "error", "cancelled"}
+
+# Per-run fields a retry must not inherit from the job it repeats. Everything
+# else — the filename, model, language, timestamps, turbo, vocabulary — is
+# exactly what the user chose the first time and is carried over.
+_RESET_ON_RETRY = {
+    "id", "status", "detail", "progress", "partial", "result", "path",
+    "cancelled", "created_at", "started_at", "finished_at",
+    "timestamps_unavailable", "history_saved", "history_error",
+}
+
+
+class _JobCancelled(Exception):
+    """Raised inside the worker when the user cancels a running job."""
+
+
+def _public_job(job: dict) -> dict:
+    return {key: value for key, value in job.items() if key not in _PRIVATE_JOB_FIELDS}
+
 # Updated by the optional native macOS helper. The web UI uses this to show
 # whether right-Command desktop dictation is running and which macOS permission
 # still needs attention.
@@ -378,12 +403,17 @@ def _prune_jobs_locked() -> None:
     finished = [
         (job.get("finished_at") or job.get("created_at") or 0.0, job_id)
         for job_id, job in jobs.items()
-        if job.get("status") in {"done", "error"}
+        if job.get("status") in _FINISHED_STATUSES
     ]
     evict = {job_id for stamp, job_id in finished if now - stamp > JOB_RETENTION_SECONDS}
     surviving = sorted((item for item in finished if item[1] not in evict), reverse=True)
     evict.update(job_id for _stamp, job_id in surviving[MAX_REMEMBERED_JOBS:])
     for job_id in evict:
+        # A failed job keeps its upload so it can be retried; forgetting the
+        # job is the last moment anything still knows to delete the file.
+        retained = jobs.get(job_id, {}).get("path")
+        if retained:
+            Path(retained).unlink(missing_ok=True)
         jobs.pop(job_id, None)
 
 
@@ -391,7 +421,7 @@ def _forget_jobs(*job_ids: str) -> None:
     """Drop finished jobs whose transcript the user just deleted."""
     with jobs_lock:
         for job_id in job_ids:
-            if jobs.get(job_id, {}).get("status") in {"done", "error"}:
+            if jobs.get(job_id, {}).get("status") in _FINISHED_STATUSES:
                 del jobs[job_id]
 
 
@@ -400,6 +430,14 @@ def _run_job(job_id: str) -> None:
         job = dict(jobs[job_id])
 
     path = Path(job["path"])
+    cancelled = job["cancelled"]
+    if cancelled.is_set():
+        # Cancelled while it sat in the queue: never load a model for it.
+        _update(job_id, status="cancelled", detail="Cancelled", progress=0.0,
+                finished_at=time.time())
+        path.unlink(missing_ok=True)
+        return
+
     try:
         _update(job_id, status="loading", detail="Loading model (first run downloads weights)")
         session = get_session(job["model"])
@@ -444,6 +482,8 @@ def _run_job(job_id: str) -> None:
 
         # split_audio_into_chunks returns (waveform, offset_seconds) tuples.
         for i, (chunk_audio, chunk_offset) in enumerate(chunks):
+            if cancelled.is_set():
+                raise _JobCancelled
             if stopping.is_set():
                 raise RuntimeError("Server stopped before this job finished")
             try:
@@ -519,10 +559,19 @@ def _run_job(job_id: str) -> None:
             history_error=history_error,
             timestamps_unavailable=timestamps_unavailable,
         )
+    except _JobCancelled:
+        _update(job_id, status="cancelled", detail="Cancelled", partial=None,
+                finished_at=time.time())
     except Exception as exc:  # surface the real cause to the UI
-        _update(job_id, status="error", detail=f"{type(exc).__name__}: {exc}")
+        _update(job_id, status="error", detail=f"{type(exc).__name__}: {exc}",
+                finished_at=time.time())
     finally:
-        path.unlink(missing_ok=True)
+        # A failed job keeps its upload so "Retry" does not need a re-upload.
+        # _prune_jobs_locked deletes it when the job is finally forgotten.
+        with jobs_lock:
+            retry_pending = jobs.get(job_id, {}).get("status") == "error"
+        if not retry_pending:
+            path.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -721,6 +770,7 @@ async def create_job(
             "partial": None,
             "context": context.strip(),
             "path": str(dest),
+            "cancelled": threading.Event(),
             "created_at": time.time(),
             "result": None,
         }
@@ -729,14 +779,88 @@ async def create_job(
     return JSONResponse({"id": job_id})
 
 
+@app.get("/api/jobs")
+def list_jobs() -> dict:
+    """Everything the queue view needs, newest first.
+
+    One worker means a second upload really does wait, so the queue has to be
+    visible: without it a queued file looks indistinguishable from a hung one.
+    """
+    with jobs_lock:
+        _prune_jobs_locked()
+        ordered = sorted(
+            jobs.values(), key=lambda job: job.get("created_at") or 0.0, reverse=True
+        )
+        return {"jobs": [_public_job(job) for job in ordered]}
+
+
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
     with jobs_lock:
         job = jobs.get(job_id)
         if job is None:
             raise HTTPException(404, "Job not found")
-        public = {k: v for k, v in job.items() if k != "path"}
-    return public
+        return _public_job(job)
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> dict:
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Job not found")
+        if job["status"] in _FINISHED_STATUSES:
+            raise HTTPException(409, f"This job already finished ({job['status']})")
+        job["cancelled"].set()
+        # A queued job is never picked up, so settle it here rather than wait
+        # for a worker that may be several long files away from reaching it.
+        if job["status"] == "queued":
+            job.update(status="cancelled", detail="Cancelled", finished_at=time.time())
+            Path(job["path"]).unlink(missing_ok=True)
+    return {"id": job_id, "status": "cancelled"}
+
+
+@app.post("/api/jobs/{job_id}/retry")
+def retry_job(job_id: str) -> JSONResponse:
+    """Requeue a failed job without a second upload.
+
+    Only a failure qualifies. Cancelling is a deliberate "I don't want this",
+    and its upload is deleted immediately rather than kept on the chance of a
+    retry — this app does not hoard audio the user has already abandoned.
+    """
+    with jobs_lock:
+        source = jobs.get(job_id)
+        if source is None:
+            raise HTTPException(404, "Job not found")
+        if source["status"] != "error":
+            raise HTTPException(409, "Only a failed job can be retried")
+        original = Path(source["path"])
+        if not original.is_file():
+            raise HTTPException(
+                404, "The uploaded file is no longer available — upload it again"
+            )
+
+        new_id = uuid.uuid4().hex[:12]
+        destination = UPLOAD_DIR / f"{new_id}{original.suffix}"
+        # Copied rather than moved: the original job stays retryable until it
+        # is evicted, so a retry that fails immediately can be retried again.
+        shutil.copy2(original, destination)
+        _prune_jobs_locked()
+        jobs[new_id] = {
+            **{key: value for key, value in source.items()
+               if key not in _RESET_ON_RETRY},
+            "id": new_id,
+            "status": "queued",
+            "detail": "Queued",
+            "progress": 0.0,
+            "partial": None,
+            "result": None,
+            "path": str(destination),
+            "cancelled": threading.Event(),
+            "created_at": time.time(),
+        }
+    executor.submit(_run_job, new_id)
+    return JSONResponse({"id": new_id})
 
 
 @app.get("/api/transcripts")

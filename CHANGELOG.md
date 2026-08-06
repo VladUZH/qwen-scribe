@@ -8,6 +8,10 @@ details when clearly documented.
 
 ### Added
 
+- A visible transcription queue. Every job is listed in the order the worker
+  will reach it, with its position while it waits, a Cancel button that stops
+  a queued or running job, Retry for a failed one that does not need the file
+  uploaded again, and Open for a finished one
 - The file-transcription choices — model, language, word timestamps, turbo,
   and vocabulary hints — are now remembered. They are stored by the server
   alongside the dictation settings, so they survive a reload, a restart, a

@@ -6,6 +6,7 @@ run on any machine, with or without MLX.
 
 import sys
 import tempfile
+import threading
 import types
 import unittest
 import uuid
@@ -90,6 +91,7 @@ class WorkerTestCase(unittest.TestCase):
             "partial": None,
             "context": "",
             "path": str(upload),
+            "cancelled": threading.Event(),
             "created_at": 1.0,
             "result": None,
             **overrides,
@@ -245,6 +247,136 @@ class TimestampFallbackTests(WorkerTestCase):
 
         self.assertEqual(job["status"], "error")
         self.assertIn("Metal device lost", job["detail"])
+
+
+class QueueControlTests(WorkerTestCase):
+    """Listing, cancelling, and retrying — the queue the UI now renders."""
+
+    def setUp(self):
+        super().setUp()
+        self.client = TestClient(server.app, base_url=BASE_URL)
+        submit = mock.patch.object(server.executor, "submit")
+        self.submit = submit.start()
+        self.addCleanup(submit.stop)
+
+    def test_listing_shows_every_job_newest_first_and_hides_internals(self):
+        older = self.stage_job(created_at=1.0, filename="a.wav")
+        newer = self.stage_job(created_at=2.0, filename="b.wav")
+
+        listing = self.client.get("/api/jobs").json()["jobs"]
+
+        self.assertEqual([job["id"] for job in listing], [newer, older])
+        self.assertEqual([job["filename"] for job in listing], ["b.wav", "a.wav"])
+        self.assertNotIn("path", listing[0])
+        self.assertNotIn("cancelled", listing[0])
+
+    def test_cancelling_a_queued_job_marks_it_and_removes_the_upload(self):
+        job_id = self.stage_job()
+        upload = Path(server.jobs[job_id]["path"])
+        self.assertTrue(upload.exists())
+
+        response = self.client.post(f"/api/jobs/{job_id}/cancel")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(server.jobs[job_id]["status"], "cancelled")
+        self.assertFalse(upload.exists())
+
+    def test_cancelling_is_rejected_once_the_job_has_finished(self):
+        job_id = self.stage_job(status="done")
+        response = self.client.post(f"/api/jobs/{job_id}/cancel")
+        self.assertEqual(response.status_code, 409)
+
+    def test_cancelling_an_unknown_job_is_a_404(self):
+        self.assertEqual(
+            self.client.post("/api/jobs/deadbeefcafe/cancel").status_code, 404
+        )
+
+    def test_a_job_cancelled_while_queued_never_loads_a_model(self):
+        """The worker must notice the flag before it touches the GPU."""
+        self.install_audio_stubs(chunks=1)
+        job_id = self.stage_job()
+        self.client.post(f"/api/jobs/{job_id}/cancel")
+
+        with mock.patch.object(server, "get_session") as get_session:
+            server._run_job(job_id)
+
+        get_session.assert_not_called()
+        self.assertEqual(server.jobs[job_id]["status"], "cancelled")
+
+    def test_cancelling_mid_run_stops_at_the_next_chunk_boundary(self):
+        job_id = None
+
+        class CancellingSession:
+            def transcribe(inner, audio, **kwargs):
+                # Cancel from inside the first chunk, as the user would.
+                server.jobs[job_id]["cancelled"].set()
+                return FakeResult(text="partial")
+
+        self.install_audio_stubs(chunks=3)
+        job_id = self.stage_job()
+        with mock.patch.object(server, "get_session", return_value=CancellingSession()):
+            server._run_job(job_id)
+
+        job = server.jobs[job_id]
+        self.assertEqual(job["status"], "cancelled")
+        self.assertIsNone(job["result"])
+        self.assertFalse(Path(job["path"]).exists())
+
+    def test_retry_reuses_the_upload_and_the_original_options(self):
+        job_id = self.stage_job(
+            status="error", filename="a.wav", language="Korean", timestamps=True
+        )
+
+        body = self.client.post(f"/api/jobs/{job_id}/retry").json()
+
+        retried = server.jobs[body["id"]]
+        self.assertNotEqual(body["id"], job_id)
+        self.assertEqual(retried["filename"], "a.wav")
+        self.assertEqual(retried["language"], "Korean")
+        self.assertTrue(retried["timestamps"])
+        self.assertEqual(retried["status"], "queued")
+        self.assertTrue(Path(retried["path"]).exists())
+        self.addCleanup(Path(retried["path"]).unlink, True)
+        self.submit.assert_called_once_with(server._run_job, body["id"])
+
+    def test_retry_is_rejected_for_a_running_job(self):
+        job_id = self.stage_job(status="processing")
+        self.assertEqual(self.client.post(f"/api/jobs/{job_id}/retry").status_code, 409)
+
+    def test_retry_is_rejected_for_a_cancelled_job(self):
+        """Cancelling deletes the upload, so Retry there could never work."""
+        job_id = self.stage_job(status="cancelled")
+        self.assertEqual(self.client.post(f"/api/jobs/{job_id}/retry").status_code, 409)
+
+    def test_retry_without_the_upload_asks_for_a_fresh_one(self):
+        job_id = self.stage_job(status="error")
+        Path(server.jobs[job_id]["path"]).unlink()
+
+        response = self.client.post(f"/api/jobs/{job_id}/retry")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("upload it again", response.json()["detail"])
+
+    def test_a_failed_job_keeps_its_upload_so_it_can_be_retried(self):
+        class BrokenSession:
+            def transcribe(self, audio, **kwargs):
+                raise RuntimeError("Metal device lost")
+
+        job = self.run_worker(BrokenSession())
+
+        self.assertEqual(job["status"], "error")
+        self.assertTrue(Path(job["path"]).exists())
+
+    def test_evicting_a_failed_job_deletes_its_retained_upload(self):
+        job_id = self.stage_job(status="error", finished_at=1.0)
+        upload = Path(server.jobs[job_id]["path"])
+
+        with mock.patch.object(server, "JOB_RETENTION_SECONDS", 0):
+            with server.jobs_lock:
+                server._prune_jobs_locked()
+
+        self.assertNotIn(job_id, server.jobs)
+        self.assertFalse(upload.exists())
 
 
 class JobShutdownTests(unittest.TestCase):
