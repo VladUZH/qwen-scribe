@@ -6,6 +6,11 @@ details when clearly documented.
 
 ## [Unreleased]
 
+## [0.2.2-beta.1] - 2026-08-06
+
+Everything in this release comes from one hands-on testing report on r/macapps
+from someone who ran real video files through v0.2.1-beta.1.
+
 ### Added
 
 - A visible transcription queue. Every job is listed in the order the worker

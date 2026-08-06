@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="${DIST_DIR:-$ROOT/dist}"
-VERSION="${VERSION:-0.2.0}"
+VERSION="${VERSION:-0.2.2}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 IDENTITY="${CODESIGN_IDENTITY:--}"
 APP="$DIST/Qwen Scribe.app"
