@@ -66,6 +66,7 @@ class SettingsTests(unittest.TestCase):
                 "timestamps": False,
                 "turbo": False,
                 "context": "",
+                "sentence_per_line": False,
             },
         )
 

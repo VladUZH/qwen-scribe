@@ -171,7 +171,8 @@
   .transcript.visible { display: block; }
   .t-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
   .t-meta { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11.5px; color: var(--muted); }
-  .t-actions { display: flex; gap: 8px; }
+  .t-actions { display: flex; gap: 8px; align-items: center; }
+  .t-toggle { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); white-space: nowrap; cursor: pointer; }
   button.act {
     background: var(--panel-2);
     border: 1px solid var(--line);
@@ -340,6 +341,7 @@
     <div class="t-head">
       <div class="t-meta" id="tMeta"></div>
       <div class="t-actions">
+        <label class="t-toggle"><input type="checkbox" id="oneSentencePerLine"> One sentence per line</label>
         <button class="act" id="btnCopy">Copy text</button>
         <button class="act" id="btnTxt">Download .txt</button>
         <button class="act" id="btnSrt" hidden>Download .srt</button>
@@ -624,7 +626,8 @@
       if (job.partial) {
         $("transcript").classList.add("visible");
         $("tMeta").textContent = "live transcript — updating as chunks finish";
-        $("tBody").textContent = job.partial;
+        lastResult = { text: job.partial, segments: null, language: null };
+        renderTranscriptBody();
         ["btnCopy","btnTxt","btnSrt"].forEach(b => $(b).hidden = true);
       }
     }
@@ -673,7 +676,9 @@
     paintProgress(0, false);
     // A job that failed part-way still produced usable text. Keep it, but
     // relabel it so it can never be mistaken for a finished transcript.
-    const partial = $("transcript").classList.contains("visible") ? $("tBody").textContent : "";
+    // Read the raw text, not the rendered body: the sentence-per-line view
+    // would otherwise bake its line breaks into the canonical transcript.
+    const partial = $("transcript").classList.contains("visible") ? (lastResult?.text || "") : "";
     if (partial) {
       lastResult = { text: partial, segments: null, language: null };
       $("tMeta").textContent = "partial transcript — the job failed before finishing";
@@ -693,6 +698,38 @@
   }
   $("model").addEventListener("change", syncTurboAvailability);
 
+  // Split after sentence-final punctuation, keeping the mark on the sentence
+  // it ends. Two cases, because Chinese and Japanese are written without
+  // spaces: an ideographic full stop is a boundary even when the next
+  // character follows it immediately, whereas an ASCII period also needs the
+  // following whitespace to tell "end." from "3.5". Requiring the next
+  // sentence not to start lowercase is what keeps "e.g. this" on one line;
+  // Qwen3-ASR's punctuation and capitalization are what make that reliable.
+  // Guards, in order: not right after an initial or a dotted abbreviation
+  // ("J. R. R.", "U.S.", "e.g.", "i.e."), and not after a common title.
+  const SENTENCE_BREAK =
+    /(?<=[。！？])(?=\S)|(?<!\b[A-Za-z]\.)(?<!\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|No|Fig|Inc|Ltd|Co)\.)(?<=[.!?。！？…])\s+(?=[^a-z])/;
+
+  function sentenceLines(text) {
+    return (text || "")
+      .split(SENTENCE_BREAK)
+      .map(sentence => sentence.trim())
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  function renderTranscriptBody() {
+    const text = lastResult?.text || "";
+    $("tBody").textContent = $("oneSentencePerLine").checked
+      ? (sentenceLines(text) || "(no speech detected)")
+      : (text || "(no speech detected)");
+  }
+
+  $("oneSentencePerLine").addEventListener("change", () => {
+    renderTranscriptBody();
+    saveTranscription({ sentence_per_line: $("oneSentencePerLine").checked });
+  });
+
   function showResult(result, details = {}) {
     lastResult = result;
     activeTranscriptId = details.id || null;
@@ -702,7 +739,7 @@
     $("transcript").classList.add("visible");
     $("btnCopy").hidden = false;
     $("btnTxt").hidden = false;
-    $("tBody").textContent = result.text || "(no speech detected)";
+    renderTranscriptBody();
     const words = (result.text || "").split(/\s+/).filter(Boolean).length;
     const meta = [];
     if (details.filename) meta.push(details.filename);
@@ -721,7 +758,7 @@
   }
 
   $("btnCopy").addEventListener("click", async () => {
-    await navigator.clipboard.writeText(lastResult?.text || "");
+    await navigator.clipboard.writeText(transcriptText());
     $("btnCopy").textContent = "Copied";
     setTimeout(() => $("btnCopy").textContent = "Copy text", 1400);
   });
@@ -734,8 +771,13 @@
     URL.revokeObjectURL(a.href);
   };
 
+  // What is on screen is what gets downloaded and copied, so the
+  // sentence-per-line view is not silently discarded on the way out.
+  const transcriptText = () =>
+    $("oneSentencePerLine").checked ? sentenceLines(lastResult?.text) : (lastResult?.text || "");
+
   $("btnTxt").addEventListener("click", () =>
-    download(`${baseName}.txt`, lastResult?.text || "", "text/plain"));
+    download(`${baseName}.txt`, transcriptText(), "text/plain"));
 
   // Build SRT cues from word-level segments: break on long pauses,
   // ~42 chars, or 6 s per cue.
@@ -861,6 +903,7 @@
     $("timestamps").checked = stored.timestamps;
     $("turbo").checked = stored.turbo;
     $("context").value = stored.context;
+    $("oneSentencePerLine").checked = stored.sentence_per_line;
     // Called directly rather than by dispatching "change", which would also
     // fire the save listener and write the settings straight back on load.
     syncTurboAvailability();

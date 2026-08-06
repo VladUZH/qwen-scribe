@@ -12,6 +12,9 @@ details when clearly documented.
   will reach it, with its position while it waits, a Cancel button that stops
   a queued or running job, Retry for a failed one that does not need the file
   uploaded again, and Open for a finished one
+- A "one sentence per line" toggle on the transcript, so a long result is not
+  one unbroken wall of text. Copy text and Download .txt follow the view, and
+  the choice is remembered
 - The file-transcription choices — model, language, word timestamps, turbo,
   and vocabulary hints — are now remembered. They are stored by the server
   alongside the dictation settings, so they survive a reload, a restart, a

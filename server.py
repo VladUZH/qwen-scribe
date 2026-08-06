@@ -198,6 +198,7 @@ DEFAULT_SETTINGS = {
         "timestamps": False,
         "turbo": False,
         "context": "",
+        "sentence_per_line": False,
     },
 }
 
@@ -232,6 +233,7 @@ _SECTION_VALIDATORS = {
         "timestamps": _boolean,
         "turbo": _boolean,
         "context": _short_text,
+        "sentence_per_line": _boolean,
     },
 }
 
