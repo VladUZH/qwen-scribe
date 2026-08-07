@@ -32,9 +32,25 @@ from someone who ran real video files through v0.2.1-beta.1.
 
 ### Changed
 
-- The 4 GB per-file cap is now stated on the drop zone and in the README, and
-  the error explains that it protects against a staged upload needing twice
-  the file's size in free disk space rather than being a model limit
+- The interface now has a primary path instead of showing every control it
+  owns at once. What stays on screen is what changes per file — the drop
+  zone, model, language, and word timestamps. Domain vocabulary, the full
+  format list, and the size limit moved into a "More options" disclosure that
+  opens itself whenever something inside it is set, so a setting that is
+  doing something is never hidden
+- Desktop dictation is one card of two lines rather than two paragraphs with
+  three dropdowns permanently open beneath it. Its push-to-talk key, model,
+  and language moved behind "Set up", which also means the dictation
+  selectors and the file-transcription ones are no longer on screen together
+- The macOS permission note appears only while a permission is actually
+  missing, and names the ones being withheld instead of listing all three
+- Speculative decoding is no longer offered in the interface. Its own label
+  said it is slower than normal decoding, which made it a control whose
+  honest description told people not to use it; the server still accepts the
+  parameter, so it can return when it is genuinely faster
+- The 4 GB per-file cap is now explained in "More options" and in the README,
+  and the error explains that it protects against a staged upload needing
+  twice the file's size in free disk space rather than being a model limit
 - The web interface now says that Qwen Scribe is a menu-bar app, and that Open,
   Restart Server, and Quit live there — a tester reported being unable to find
   any way to quit or restart it
@@ -60,6 +76,10 @@ from someone who ran real video files through v0.2.1-beta.1.
   now: a double click queues one job, not two
 - A job cancelled just as its last chunk finished could still complete and
   save itself to history after the interface had already reported it stopping
+- The transcript header no longer breaks "Copy text" and "Download .txt"
+  across two lines each when the filename is long
+- `hidden` had no effect on the settings rows, because a class setting
+  `display` outranks the browser's own rule for the attribute
 ## [0.2.1-beta.1] - 2026-08-02
 
 ### Fixed

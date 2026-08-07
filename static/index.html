@@ -207,16 +207,14 @@
   .transcript { margin-top: 28px; display: none; }
   .transcript.visible { display: block; }
   .t-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 12px; }
-  /* The actions keep their width; the filename is what gives way, because a
-     truncated name still reads while a button broken over two lines does not. */
+  /* The actions keep their width so a button is never broken across two lines;
+     the metadata wraps instead, since truncating it loses the word count. */
   .t-meta {
     font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
     font-size: 11.5px;
     color: var(--muted);
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
   }
   .t-actions { display: flex; gap: 8px; align-items: center; flex: none; }
   .t-actions button.act { white-space: nowrap; }
