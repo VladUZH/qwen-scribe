@@ -134,23 +134,24 @@
   .more-note #formatsFull { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; }
 
   /* Desktop dictation */
-  /* A strip, not a card: dictation is a standing capability, not a step in
-     the task this page is for. It recedes until it has something to say. */
+  /* The card keeps its weight — dictation is a real capability, and the panel
+     is what makes it read as one. What it does not get back is the two
+     paragraphs of prose that used to fill it. */
   .dictation {
-    margin-top: 26px;
+    margin-top: 22px;
     display: flex;
-    align-items: baseline;
-    gap: 12px;
-    border-top: 1px solid var(--line);
-    padding: 16px 2px 0;
+    align-items: center;
+    gap: 14px;
+    background: linear-gradient(120deg, rgba(70,35,122,.22), rgba(201,54,111,.08));
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 15px 17px;
   }
   .dictation-copy { flex: 1; min-width: 0; }
-  .dictation-title { font-size: 13px; font-weight: 600; }
-  .dictation-lede { color: var(--muted); font-size: 12.5px; margin-left: 7px; }
+  .dictation-title { font-size: 13.5px; font-weight: 600; }
+  .dictation-lede { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-top: 2px; }
   .dictation-permissions { color: var(--amber); font-size: 12.5px; line-height: 1.5; margin-top: 6px; }
-  button.act.ghost { background: none; border-color: transparent; color: var(--muted); padding: 5px 9px; }
-  button.act.ghost:hover, button.act.ghost:focus-visible { color: var(--text); border-color: var(--line); }
-  .menubar-note { color: var(--muted); font-size: 11.5px; margin-top: 12px; padding: 0 2px; opacity: .8; }
+  .menubar-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 10px; padding: 0 3px; }
   .dictation-status { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
   .dictation-status::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: 1px; }
   .dictation-status.ready { color: var(--ok); }
@@ -356,11 +357,11 @@
     <kbd id="dictationKey">Right ⌘</kbd>
     <div class="dictation-copy">
       <span class="dictation-title">Desktop dictation</span>
-      <span class="dictation-lede">hold in any text field to record, release to paste</span>
+      <span class="dictation-lede">Hold in any text field to record; release to transcribe and paste.</span>
       <p class="dictation-permissions" id="dictationPermissions" hidden></p>
     </div>
     <div class="dictation-status" id="dictationStatus">starting</div>
-    <button class="act ghost" id="btnDictationSetup" aria-expanded="false"
+    <button class="act" id="btnDictationSetup" aria-expanded="false"
             aria-controls="dictationSettings" hidden>Set up</button>
   </div>
 
