@@ -20,6 +20,9 @@
     --radius: 14px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  /* A class that sets `display` outranks the user agent's [hidden] rule, so
+     without this a hidden .options grid stays on screen. */
+  [hidden] { display: none !important; }
   html { color-scheme: dark; }
   body {
     background: var(--bg);
@@ -66,8 +69,7 @@
   .drop.dragover { border-color: var(--amber); background: var(--panel-2); }
   .drop h2 { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
   .drop p { color: var(--muted); font-size: 13.5px; }
-  .drop .formats { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; margin-top: 14px; color: var(--muted); }
-  .drop .drop-note { font-size: 11.5px; margin-top: 10px; opacity: .72; }
+  .drop .formats { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; margin-top: 14px; color: var(--muted); opacity: .8; }
   input[type=file] { display: none; }
 
   /* Options */
@@ -100,11 +102,43 @@
   .field-wide { grid-column: 1 / -1; }
   .check { display: flex; align-items: center; gap: 8px; padding-top: 26px; }
   .check input { accent-color: var(--amber); width: 16px; height: 16px; }
-  .check label { font-size: 13.5px; cursor: pointer; }
+  .check label { font-size: 13.5px; cursor: pointer; white-space: nowrap; }
+  .check .hint { color: var(--muted); font-size: 12px; }
+
+  /* Secondary options — present, but not competing with the primary path */
+  .more { margin-top: 14px; }
+  .more > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    width: fit-content;
+    font-size: 12.5px;
+    color: var(--muted);
+    cursor: pointer;
+    list-style: none;
+    padding: 4px 0;
+  }
+  .more > summary::-webkit-details-marker { display: none; }
+  .more > summary::before {
+    content: "";
+    width: 5px; height: 5px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg) translate(-1px, -1px);
+    transition: transform 140ms ease;
+  }
+  .more[open] > summary::before { transform: rotate(45deg) translate(-1px, -1px); }
+  .more > summary:hover, .more > summary:focus-visible { color: var(--text); outline: none; }
+  .more-body { margin-top: 10px; }
+  .more-note { color: var(--muted); font-size: 12px; line-height: 1.55; margin-top: 10px; }
+  .more-note #formatsFull { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; }
 
   /* Desktop dictation */
+  /* The card keeps its weight — dictation is a real capability, and the panel
+     is what makes it read as one. What it does not get back is the two
+     paragraphs of prose that used to fill it. */
   .dictation {
-    margin-top: 18px;
+    margin-top: 22px;
     display: flex;
     align-items: center;
     gap: 14px;
@@ -114,9 +148,10 @@
     padding: 15px 17px;
   }
   .dictation-copy { flex: 1; min-width: 0; }
-  .dictation-title { display: flex; align-items: center; gap: 9px; font-size: 13.5px; font-weight: 600; }
-  .dictation-copy p { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-top: 3px; }
-  .dictation-copy p + p { margin-top: 7px; }
+  .dictation-title { font-size: 13.5px; font-weight: 600; }
+  .dictation-lede { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-top: 2px; }
+  .dictation-permissions { color: var(--amber); font-size: 12.5px; line-height: 1.5; margin-top: 6px; }
+  .menubar-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 10px; padding: 0 3px; }
   .dictation-status { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
   .dictation-status::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: 1px; }
   .dictation-status.ready { color: var(--ok); }
@@ -171,9 +206,18 @@
   /* Transcript */
   .transcript { margin-top: 28px; display: none; }
   .transcript.visible { display: block; }
-  .t-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-  .t-meta { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11.5px; color: var(--muted); }
-  .t-actions { display: flex; gap: 8px; align-items: center; }
+  .t-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 12px; }
+  /* The actions keep their width so a button is never broken across two lines;
+     the metadata wraps instead, since truncating it loses the word count. */
+  .t-meta {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 11.5px;
+    color: var(--muted);
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .t-actions { display: flex; gap: 8px; align-items: center; flex: none; }
+  .t-actions button.act { white-space: nowrap; }
   .t-toggle { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); white-space: nowrap; cursor: pointer; }
   button.act {
     background: var(--panel-2);
@@ -269,8 +313,7 @@
   <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload audio or video file">
     <h2>Drop audio or video here</h2>
     <p>or click to choose a file — everything runs locally on this Mac</p>
-    <div class="formats" id="formats">wav · mp3 · m4a · flac · ogg · qta · mp4 · mov · mkv · webm</div>
-    <p class="drop-note">Up to 4 GB per file — the upload is staged on disk before transcribing. For a longer video, extract the audio track first.</p>
+    <div class="formats" id="formats">wav · mp3 · m4a · mp4 · mov</div>
   </div>
   <input type="file" id="file" accept="audio/*,video/*,.mkv,.opus,.qta">
 
@@ -288,26 +331,36 @@
     </div>
     <div class="check">
       <input type="checkbox" id="timestamps">
-      <label for="timestamps">Word timestamps (enables .srt)</label>
-    </div>
-    <div class="check" id="turboWrap">
-      <input type="checkbox" id="turbo">
-      <label for="turbo">Experimental speculative decoding — currently slower in upstream benchmarks; same quality, uses more GPU</label>
-    </div>
-    <div class="field field-wide">
-      <label for="context">Domain vocabulary <span style="text-transform:none;font-weight:400">(optional — space-separated terms, e.g. "EBITDA CapEx ESG")</span></label>
-      <input type="text" id="context" maxlength="2000" placeholder="Rare names and terms the audio contains">
+      <label for="timestamps">Word timestamps <span class="hint">for .srt</span></label>
     </div>
   </div>
+
+  <details class="more" id="moreOptions">
+    <summary>More options</summary>
+    <div class="more-body">
+      <div class="field">
+        <label for="context">Domain vocabulary</label>
+        <input type="text" id="context" maxlength="2000" placeholder="Rare names and terms the audio contains — space separated, e.g. EBITDA CapEx ESG">
+      </div>
+      <p class="more-note">
+        Accepts <span id="formatsFull">audio and video files</span>.
+        Up to 4 GB per file: the upload is staged on disk before transcribing, so
+        one job briefly needs twice the file's size free. For a longer video,
+        transcribe its extracted audio track instead.
+      </p>
+    </div>
+  </details>
 
   <div class="dictation" aria-live="polite">
     <kbd id="dictationKey">Right ⌘</kbd>
     <div class="dictation-copy">
-      <div class="dictation-title">Desktop dictation</div>
-      <p>Hold in any text field to record; release to transcribe and paste. macOS may ask for Microphone, Accessibility, and Input Monitoring access.</p>
-      <p>Qwen Scribe runs from the menu bar — the waveform icon at the top right of the screen has Open, Restart Server, and Quit. Closing this tab does not stop it.</p>
+      <span class="dictation-title">Desktop dictation</span>
+      <span class="dictation-lede">Hold in any text field to record; release to transcribe and paste.</span>
+      <p class="dictation-permissions" id="dictationPermissions" hidden></p>
     </div>
     <div class="dictation-status" id="dictationStatus">starting</div>
+    <button class="act" id="btnDictationSetup" aria-expanded="false"
+            aria-controls="dictationSettings" hidden>Set up</button>
   </div>
 
   <div class="options dictation-settings" id="dictationSettings" hidden>
@@ -325,6 +378,8 @@
     </div>
     <div class="settings-note field-wide" id="settingsNote">Changes apply to desktop dictation within about ten seconds.</div>
   </div>
+
+  <p class="menubar-note">Runs from the menu bar — the waveform icon has Open, Restart Server and Quit. Closing this tab does not stop it.</p>
 
   <div class="job" id="job">
     <div class="job-head">
@@ -446,7 +501,15 @@
     // the picker filter, and the upload check can never drift apart.
     if (Array.isArray(cfg.extensions) && cfg.extensions.length) {
       allowedExtensions = new Set(cfg.extensions.map(e => e.toLowerCase()));
-      $("formats").textContent = cfg.extensions.map(e => e.replace(/^\./, "")).join(" · ");
+      const bare = cfg.extensions.map(e => e.replace(/^\./, ""));
+      // The drop zone names the handful of formats people actually have; the
+      // full list is reassurance, not instruction, so it lives in More options.
+      const COMMON = ["wav", "mp3", "m4a", "mp4", "mov"];
+      const shown = COMMON.filter(e => bare.includes(e));
+      const rest = bare.length - shown.length;
+      $("formats").textContent =
+        shown.join(" · ") + (rest > 0 ? ` · +${rest} more` : "");
+      $("formatsFull").textContent = bare.join(", ");
       $("file").accept = cfg.extensions.join(",");
     }
     if (cfg.quantized) {
@@ -516,7 +579,8 @@
     form.append("model", $("model").value);
     form.append("language", $("language").value);
     form.append("timestamps", $("timestamps").checked);
-    form.append("turbo", $("turbo").checked && $("model").value === "1.7b");
+    // Speculative decoding is not offered: the pinned upstream implementation
+    // benchmarks slower than plain decoding, so the server default stands.
     form.append("context", $("context").value);
 
     let res;
@@ -795,13 +859,6 @@
     }
   }
 
-  function syncTurboAvailability() {
-    const is06 = $("model").value === "0.6b";
-    $("turbo").disabled = is06;
-    $("turboWrap").style.opacity = is06 ? 0.4 : 1;
-  }
-  $("model").addEventListener("change", syncTurboAvailability);
-
   // Split after sentence-final punctuation, keeping the mark — and any closing
   // quote or bracket belonging to it — on the sentence it ends. Two cases,
   // because Chinese and Japanese are written without spaces: an ideographic
@@ -1030,7 +1087,9 @@
     fill($("setModel"), body.options.models, body.dictation.model);
     fill($("setLanguage"), body.options.languages, body.dictation.language);
     $("dictationKey").textContent = HOTKEY_LABELS[body.dictation.hotkey] || "Right ⌘";
-    $("dictationSettings").hidden = false;
+    // The settings themselves stay folded away; only the way in appears, and
+    // only once there is something behind it to show.
+    $("btnDictationSetup").hidden = false;
     await configReady.catch(() => {});
     applyTranscriptionSettings(body.transcription);
   }
@@ -1042,16 +1101,17 @@
     $("model").value = stored.model;
     $("language").value = stored.language;
     $("timestamps").checked = stored.timestamps;
-    $("turbo").checked = stored.turbo;
     // This also runs when a later save fails and resyncs everything, so an
     // edit still inside its debounce must not be overwritten by the value it
     // is about to replace.
     if (contextSaveTimer === null) $("context").value = stored.context;
     $("oneSentencePerLine").checked = stored.sentence_per_line;
+    // Never leave a setting that is doing something hidden behind a summary
+    // the user has no reason to open.
+    if (stored.context) $("moreOptions").open = true;
     // Called directly rather than by dispatching "change", which would also
     // fire the save listener and write the settings straight back on load.
     // The redraw that listener would have triggered still has to happen.
-    syncTurboAvailability();
     renderTranscriptBody();
   }
 
@@ -1073,7 +1133,7 @@
     transcriptionSavesBound = true;
     ["model", "language"].forEach(id =>
       $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).value })));
-    ["timestamps", "turbo"].forEach(id =>
+    ["timestamps"].forEach(id =>
       $(id).addEventListener("change", () => saveTranscription({ [id]: $(id).checked })));
     $("oneSentencePerLine").addEventListener("change", () =>
       saveTranscription({ sentence_per_line: $("oneSentencePerLine").checked }));
@@ -1226,6 +1286,21 @@
     }
   });
 
+  $("btnDictationSetup").addEventListener("click", () => {
+    const open = $("dictationSettings").hidden;
+    $("dictationSettings").hidden = !open;
+    $("btnDictationSetup").setAttribute("aria-expanded", String(open));
+    $("btnDictationSetup").textContent = open ? "Done" : "Set up";
+  });
+
+  // Named for the permission macOS is actually withholding, so the sentence
+  // below can say what to grant rather than listing all three every time.
+  const PERMISSION_LABELS = {
+    microphone: "Microphone",
+    input_monitoring: "Input Monitoring",
+    accessibility: "Accessibility",
+  };
+
   async function refreshDictationStatus() {
     const status = $("dictationStatus");
     try {
@@ -1255,6 +1330,18 @@
       status.textContent = message;
       status.classList.toggle("ready", ready);
       status.classList.toggle("needs-permission", needsPermission);
+      // Only worth saying while it is still actionable. Once macOS has granted
+      // everything, a standing paragraph about permissions is just noise.
+      const missing = Object.keys(PERMISSION_LABELS)
+        .filter(name => state[name] === false)
+        .map(name => PERMISSION_LABELS[name]);
+      const note = $("dictationPermissions");
+      note.hidden = missing.length === 0;
+      if (missing.length) {
+        note.textContent =
+          `Grant ${missing.join(", ")} to Qwen Scribe in System Settings → `
+          + "Privacy & Security, then hold the key again.";
+      }
       // The hotkey can also change from the menu bar; the status poll keeps
       // the badge honest either way.
       if (state.shortcut) $("dictationKey").textContent = state.shortcut;
@@ -1262,6 +1349,7 @@
       status.textContent = "not running";
       status.classList.remove("ready");
       status.classList.remove("needs-permission");
+      $("dictationPermissions").hidden = true;
     }
   }
 

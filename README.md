@@ -127,7 +127,8 @@ browser tab open at all.
 | --- | --- |
 | Maximum file size | **4 GB.** The upload is staged in a temporary folder before decoding, so one job briefly needs twice the file's size in free disk space. This is not a model limit — for a longer video, extract the audio track first: `ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 output.wav` |
 | Concurrency | One file at a time. Further uploads queue; the Queue list shows the order, and each entry can be cancelled, a failed one retried without re-uploading. Cancelling a waiting file is immediate; cancelling the one being transcribed takes effect when the current 30-second chunk finishes, since a model call cannot be interrupted part-way |
-| Vocabulary hints | Up to 2000 characters. The hint is added to every chunk's prompt, so it is paid for once per chunk of the file |
+| Vocabulary hints | Up to 2000 characters, under **More options**. The hint is added to every chunk's prompt, so it is paid for once per chunk of the file |
+| Dictation settings | The push-to-talk key, model, and language live behind **Set up** on the dictation card, and apply within about ten seconds. They are separate from the model and language used for file transcription |
 | Languages | Automatic detection, or any of the fourteen Qwen3-ASR supports. Word timestamps for Japanese and Korean use the tokenizers shipped in `requirements-lock.txt`; if the aligner cannot run, the transcript is still produced and saved, without the `.srt` |
 
 ## Desktop dictation permissions
