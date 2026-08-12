@@ -7,7 +7,7 @@
 # exception: it is the client Starlette's TestClient now expects, and it is
 # never shipped to users.
 fastapi==0.141.1
-starlette==1.3.1
+starlette==1.6.0
 uvicorn==0.52.1
 python-multipart==0.0.32
 pydantic==2.13.4
