@@ -1,4 +1,4 @@
 mlx-qwen3-asr[aligner]==0.3.5
 fastapi==0.141.1
-uvicorn==0.52.1
+uvicorn==0.52.3
 python-multipart==0.0.32
