@@ -8,9 +8,9 @@
 # never shipped to users.
 fastapi==0.141.1
 starlette==1.6.0
-uvicorn==0.52.1
+uvicorn==0.52.4
 python-multipart==0.0.32
-pydantic==2.13.4
+pydantic==2.13.5
 anyio==4.14.2
 h11==0.16.0
-httpx2==2.9.1
+httpx2==2.12.0
