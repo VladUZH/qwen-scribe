@@ -88,7 +88,7 @@
     color: var(--muted);
     margin-bottom: 6px;
   }
-  select, input[type=text] {
+  select, input[type=text], textarea {
     width: 100%;
     background: var(--panel);
     border: 1px solid var(--line);
@@ -98,12 +98,14 @@
     font-size: 13.5px;
     padding: 9px 10px;
   }
-  select:focus, input[type=text]:focus { border-color: var(--amber); outline: none; }
+  select:focus, input[type=text]:focus, textarea:focus { border-color: var(--amber); outline: none; }
+  textarea { resize: vertical; min-height: 58px; line-height: 1.45; }
   .field-wide { grid-column: 1 / -1; }
   .check { display: flex; align-items: center; gap: 8px; padding-top: 26px; }
   .check input { accent-color: var(--amber); width: 16px; height: 16px; }
   .check label { font-size: 13.5px; cursor: pointer; white-space: nowrap; }
   .check .hint { color: var(--muted); font-size: 12px; }
+  .check.plain { padding-top: 0; }
 
   /* Secondary options — present, but not competing with the primary path */
   .more { margin-top: 14px; }
@@ -375,6 +377,14 @@
     <div class="field">
       <label for="setLanguage">Dictation language</label>
       <select id="setLanguage"></select>
+    </div>
+    <div class="field field-wide">
+      <label for="setDictionary">Dictionary</label>
+      <textarea id="setDictionary" maxlength="2000" rows="2" placeholder="Names and terms you dictate often, space separated — sent with every dictation as a vocabulary hint"></textarea>
+    </div>
+    <div class="check plain field-wide">
+      <input type="checkbox" id="setSaveHistory">
+      <label for="setSaveHistory">Save dictations to history <span class="hint">off keeps each one only until it is pasted</span></label>
     </div>
     <div class="settings-note field-wide" id="settingsNote">Changes apply to desktop dictation within about ten seconds.</div>
   </div>
@@ -689,9 +699,10 @@
         ? (place === 0 ? "queued — next" : `queued — ${place + (running ? 1 : 0)} ahead`)
         : (job.detail || job.status);
       row.append(name, state);
-      if (job.status === "done") {
+      if (job.status === "done" && !job.ephemeral) {
         // A retried or background job finishes outside the detail panel's
-        // poll loop, so this is the only way to reach its transcript.
+        // poll loop, so this is the only way to reach its transcript. A
+        // dictation kept out of history has nothing to open.
         row.append(queueButton("Open", false, () => openTranscript(job.id)));
       }
       if (!FINISHED.has(job.status)) {
@@ -1036,6 +1047,10 @@
     fill($("setHotkey"), body.options.hotkeys, body.dictation.hotkey);
     fill($("setModel"), body.options.models, body.dictation.model);
     fill($("setLanguage"), body.options.languages, body.dictation.language);
+    // Same guard as the vocabulary field: a resync must not overwrite an edit
+    // still inside its debounce.
+    if (dictionarySaveTimer === null) $("setDictionary").value = body.dictation.dictionary || "";
+    $("setSaveHistory").checked = body.dictation.save_history !== false;
     $("dictationKey").textContent = HOTKEY_LABELS[body.dictation.hotkey] || "Right ⌘";
     // The settings themselves stay folded away; only the way in appears, and
     // only once there is something behind it to show.
@@ -1125,6 +1140,15 @@
   }
   [["setHotkey", "hotkey"], ["setModel", "model"], ["setLanguage", "language"]].forEach(([id, key]) =>
     $(id).addEventListener("change", e => saveSetting(key, e.target.value)));
+  $("setSaveHistory").addEventListener("change", e => saveSetting("save_history", e.target.checked));
+  let dictionarySaveTimer = null;
+  $("setDictionary").addEventListener("input", () => {
+    clearTimeout(dictionarySaveTimer);   // one write per pause, not per keystroke
+    dictionarySaveTimer = setTimeout(() => {
+      dictionarySaveTimer = null;
+      saveSetting("dictionary", $("setDictionary").value);
+    }, 600);
+  });
 
   // ── Saved transcripts ─────────────────────────────────────────────────
   let searchTimer = null;

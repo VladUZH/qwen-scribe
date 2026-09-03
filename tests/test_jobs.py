@@ -22,7 +22,7 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
-from qwen_scribe import api, config, jobs, sessions
+from qwen_scribe import api, config, jobs, sessions, settings
 
 BASE_URL = "http://127.0.0.1:8990"
 WAV = b"RIFF\x00\x00\x00\x00WAVEfmt "
@@ -240,6 +240,21 @@ class JobUploadTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         (config.UPLOAD_DIR / f"{response.json()['id']}.wav").unlink()
 
+    def test_accepts_the_dictation_source_and_rejects_others(self):
+        """The native helper labels its recordings so dictation-only choices
+        apply to them and never to an uploaded file."""
+        response = self.post(source="dictation")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(jobs.jobs[response.json()["id"]]["source"], "dictation")
+        (config.UPLOAD_DIR / f"{response.json()['id']}.wav").unlink()
+
+        self.assertEqual(self.post(source="telepathy").status_code, 400)
+
+        # An older helper that sends no source is an upload.
+        response = self.post()
+        self.assertEqual(jobs.jobs[response.json()["id"]]["source"], "upload")
+        (config.UPLOAD_DIR / f"{response.json()['id']}.wav").unlink()
+
     def test_unknown_job_is_a_404(self):
         self.assertEqual(self.client.get("/api/jobs/deadbeefdead").status_code, 404)
 
@@ -439,6 +454,60 @@ class TimestampFallbackTests(WorkerTestCase):
         )
         self.assertIsNone(saved["result"]["segments"])
         self.assertEqual(saved["result"]["text"], "first second")
+
+
+class DictationHistoryTests(WorkerTestCase):
+    """Keeping dictations out of history is a choice about dictation alone."""
+
+    class GoodSession:
+        def transcribe(self, audio, **kwargs):
+            return FakeResult(text="note to self")
+
+    def setUp(self):
+        super().setUp()
+        original = dict(settings._settings["dictation"])
+        self.addCleanup(lambda: settings._settings["dictation"].update(original))
+
+    def test_a_dictation_is_saved_like_any_transcript_by_default(self):
+        job = self.run_worker(self.GoodSession(), source="dictation")
+
+        self.assertEqual(job["status"], "done")
+        self.assertTrue(job["history_saved"])
+        self.assertFalse(job.get("ephemeral"))
+        self.assertEqual(len(list(config.TRANSCRIPTS_DIR.glob("*.json"))), 1)
+
+    def test_a_dictation_stays_out_of_history_when_asked(self):
+        settings._settings["dictation"]["save_history"] = False
+
+        job = self.run_worker(self.GoodSession(), source="dictation")
+
+        # The text still reaches the helper; nothing reaches the disk.
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(job["result"]["text"], "note to self")
+        self.assertFalse(job["history_saved"])
+        self.assertIsNone(job["history_error"])   # a choice, not a failure
+        self.assertTrue(job["ephemeral"])
+        self.assertEqual(list(config.TRANSCRIPTS_DIR.glob("*.json")), [])
+        self.assertFalse(Path(job["path"]).exists())
+        listed = self.client_job(job["id"])
+        self.assertTrue(listed["ephemeral"])
+        # And it is forgotten soon after, rather than an hour later.
+        with mock.patch.object(jobs, "EPHEMERAL_RETENTION_SECONDS", 0):
+            with jobs.jobs_lock:
+                jobs._prune_jobs_locked()
+        self.assertNotIn(job["id"], jobs.jobs)
+
+    def test_the_history_choice_never_touches_an_upload(self):
+        settings._settings["dictation"]["save_history"] = False
+
+        job = self.run_worker(self.GoodSession(), source="upload")
+
+        self.assertTrue(job["history_saved"])
+        self.assertFalse(job.get("ephemeral"))
+        self.assertEqual(len(list(config.TRANSCRIPTS_DIR.glob("*.json"))), 1)
+
+    def client_job(self, job_id: str) -> dict:
+        return TestClient(api.app, base_url=BASE_URL).get(f"/api/jobs/{job_id}").json()
 
 
 class QueueControlTests(WorkerTestCase):

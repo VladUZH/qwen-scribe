@@ -120,11 +120,14 @@ async def create_job(
     timestamps: bool = Form(False),
     turbo: bool = Form(False),
     context: str = Form(""),
+    source: str = Form("upload"),
 ) -> JSONResponse:
     if model not in config.MODELS:
         raise HTTPException(400, f"Unknown model '{model}'")
     if language not in config.LANGUAGES:
         raise HTTPException(400, f"Unsupported language '{language}'")
+    if source not in jobs.SOURCES:
+        raise HTTPException(400, f"Unknown source '{source}'")
 
     # The hint is prepended to every chunk's prompt, so its cost is paid once
     # per chunk for the whole file. Measured before stripping, so this and the
@@ -175,7 +178,7 @@ async def create_job(
 
     record = jobs.new_record(
         job_id, filename=file.filename, size=size, model=model, language=language,
-        timestamps=timestamps, turbo=turbo, context=context, path=dest,
+        timestamps=timestamps, turbo=turbo, context=context, path=dest, source=source,
     )
     try:
         jobs.register(job_id, record)

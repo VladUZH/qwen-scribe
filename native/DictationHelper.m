@@ -254,6 +254,8 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 @property (nonatomic) const QSHotkeySpec *hotkey;
 @property (nonatomic, copy) NSString *dictationModel;
 @property (nonatomic, copy) NSString *dictationLanguage;
+// Names and terms from the settings, sent as the model's vocabulary hint.
+@property (nonatomic, copy) NSString *dictationDictionary;
 @property (nonatomic) BOOL serverReachable;
 @property (nonatomic) BOOL serverTransitionInProgress;
 @property (atomic) BOOL shuttingDown;
@@ -324,6 +326,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     self.hotkey = &QSHotkeyTable[0];
     self.dictationModel = @"1.7b";
     self.dictationLanguage = @"auto";
+    self.dictationDictionary = @"";
     self.hud = [[QSDictationHUD alloc] init];
     [self writeProcessIdentity];
     [self installTerminationHandler];
@@ -522,7 +525,10 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     appendField(@"language", self.dictationLanguage ?: @"auto");
     appendField(@"timestamps", @"false");
     appendField(@"turbo", @"false");
-    appendField(@"context", @"");
+    appendField(@"context", self.dictationDictionary ?: @"");
+    // Lets the server apply the dictation-only choices, such as keeping
+    // dictations out of history.
+    appendField(@"source", @"dictation");
     QSAppendString(body, [NSString stringWithFormat:@"--%@\r\n", boundary]);
     NSDateFormatter *filenameFormatter = [[NSDateFormatter alloc] init];
     filenameFormatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
@@ -811,6 +817,8 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     if ([model isKindOfClass:NSString.class]) self.dictationModel = model;
     NSString *language = dictation[@"language"];
     if ([language isKindOfClass:NSString.class]) self.dictationLanguage = language;
+    NSString *dictionary = dictation[@"dictionary"];
+    if ([dictionary isKindOfClass:NSString.class]) self.dictationDictionary = dictionary;
     NSString *hotkeyIdentifier = dictation[@"hotkey"];
     if ([hotkeyIdentifier isKindOfClass:NSString.class]) {
         const QSHotkeySpec *spec = QSHotkeyForIdentifier(hotkeyIdentifier);

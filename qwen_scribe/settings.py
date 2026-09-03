@@ -21,6 +21,14 @@ DEFAULT_SETTINGS = {
         "hotkey": "right_command",
         "model": config.DEFAULT_MODEL,
         "language": "auto",
+        # Names and terms the model should expect; sent as the vocabulary
+        # hint with every dictation, which is where Qwen3-ASR's hint support
+        # earns its keep.
+        "dictionary": "",
+        # Every dictation is a transcript like any other and lands in history
+        # unless this is off, in which case it exists only long enough for
+        # the helper to collect and paste it.
+        "save_history": True,
     },
     # The file-transcription pane's choices. Kept on the server rather than in
     # the browser so they survive a cleared cache and a different browser.
@@ -56,6 +64,8 @@ _SECTION_VALIDATORS = {
         "hotkey": _one_of(config.DICTATION_HOTKEYS),
         "model": _one_of(config.MODELS),
         "language": _one_of(config.LANGUAGES),
+        "dictionary": _short_text,
+        "save_history": _boolean,
     },
     "transcription": {
         "model": _one_of(config.MODELS),

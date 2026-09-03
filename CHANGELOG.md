@@ -6,6 +6,17 @@ details when clearly documented.
 
 ## [Unreleased]
 
+### Added
+
+- A dictation dictionary: names and terms you dictate often, entered once
+  behind **Set up** on the dictation card and sent with every dictation as
+  the model's vocabulary hint. Until now dictation sent no hint at all, even
+  though hints are what Qwen3-ASR does well with names and jargon
+- **Save dictations to history** can be switched off. A dictation is then
+  transcribed and pasted as before but never written to disk; the text is
+  held in memory only until the helper has collected it, at most a minute.
+  Uploaded files are unaffected by the choice
+
 ## [0.2.2-beta.1] - 2026-09-04
 
 Everything in this release comes from one hands-on testing report on r/macapps
@@ -19,7 +30,6 @@ end-to-end test pass of the result turned up before tagging.
   the Queue in the order they arrived
 - A testing-report issue template, so a hands-on report like the one behind
   this release has a place to land in the repository
-
 - A visible transcription queue. Every job is listed in the order the worker
   will reach it, with its position while it waits, a Cancel button that stops
   a queued or running job, Retry for a failed one that does not need the file

@@ -144,7 +144,8 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json()["dictation"],
-            {"hotkey": "right_control", "model": config.DEFAULT_MODEL, "language": "German"},
+            {"hotkey": "right_control", "model": config.DEFAULT_MODEL, "language": "German",
+             "dictionary": "", "save_history": True},
         )
         # What lands on disk is what a restarted server would load.
         self.assertEqual(settings._load_settings()["dictation"]["hotkey"], "right_control")
@@ -206,6 +207,31 @@ class SettingsTests(unittest.TestCase):
             self.client.get("/api/settings").json()["dictation"]["hotkey"],
             "right_command",
         )
+
+    def test_dictionary_and_history_choice_round_trip(self):
+        body = self.client.put(
+            "/api/settings",
+            json={"dictation": {"dictionary": "EBITDA Zürich", "save_history": False}},
+        ).json()
+        self.assertEqual(body["dictation"]["dictionary"], "EBITDA Zürich")
+        self.assertFalse(body["dictation"]["save_history"])
+        reloaded = settings._load_settings()["dictation"]
+        self.assertEqual(reloaded["dictionary"], "EBITDA Zürich")
+        self.assertFalse(reloaded["save_history"])
+
+    def test_dictionary_shares_the_vocabulary_limit(self):
+        """It is sent as the vocabulary hint, so it is bounded like one."""
+        full = self.client.put(
+            "/api/settings", json={"dictation": {"dictionary": "x" * config.MAX_CONTEXT_CHARS}}
+        )
+        self.assertEqual(full.status_code, 200)
+        for payload in (
+            {"dictation": {"dictionary": "x" * (config.MAX_CONTEXT_CHARS + 1)}},
+            {"dictation": {"dictionary": ["EBITDA"]}},
+            {"dictation": {"save_history": "no"}},
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.client.put("/api/settings", json=payload).status_code, 400)
 
     def test_dictation_status_reports_the_configured_hotkey(self):
         self.client.put("/api/settings", json={"dictation": {"hotkey": "right_option"}})

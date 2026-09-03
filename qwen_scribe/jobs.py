@@ -15,7 +15,16 @@ from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
-from . import config, history, sessions
+from . import config, history, sessions, settings
+
+# Where a job came from. The page uploads files; the native helper sends its
+# recordings as dictation, which is what lets the history opt-out apply to
+# dictation alone.
+SOURCES = {"upload", "dictation"}
+
+# A dictation the user chose not to keep is remembered only long enough for
+# the helper to collect the text, then forgotten along with the text.
+EPHEMERAL_RETENTION_SECONDS = 60
 
 
 class JobNotFound(LookupError):
@@ -132,6 +141,12 @@ def _prune_jobs_locked() -> None:
         if job.get("status") in config.TERMINAL_JOB_STATUSES
     ]
     evict = {job_id for stamp, job_id in finished if now - stamp > config.JOB_RETENTION_SECONDS}
+    # A dictation kept out of history must not linger in memory for an hour
+    # either; the helper collects it within seconds.
+    evict.update(
+        job_id for stamp, job_id in finished
+        if jobs[job_id].get("ephemeral") and now - stamp > EPHEMERAL_RETENTION_SECONDS
+    )
     surviving = sorted((item for item in finished if item[1] not in evict), reverse=True)
     evict.update(job_id for _stamp, job_id in surviving[config.MAX_REMEMBERED_JOBS:])
     for job_id in evict:
@@ -314,6 +329,12 @@ def _run_job(job_id: str) -> None:
         }
         history_saved = True
         history_error = None
+        # Read at the moment of saving, so a change made while a long
+        # dictation was still transcribing applies to it.
+        keep = (
+            job.get("source") != "dictation"
+            or settings.current("dictation").get("save_history", True)
+        )
         completed_job = {
             **job,
             "started_at": started_at,
@@ -335,13 +356,19 @@ def _run_job(job_id: str) -> None:
                 or current.get("status") in config.TERMINAL_JOB_STATUSES
             ):
                 raise RuntimeError("Server stopped before this job finished")
-            try:
-                history._save_transcript(completed_job, result, finished_at)
-            except Exception as exc:
-                # Never discard a successful transcription merely because its
-                # history file could not be written. The UI surfaces this warning.
+            if keep:
+                try:
+                    history._save_transcript(completed_job, result, finished_at)
+                except Exception as exc:
+                    # Never discard a successful transcription merely because
+                    # its history file could not be written. The UI surfaces
+                    # this warning.
+                    history_saved = False
+                    history_error = f"Could not save transcript: {type(exc).__name__}: {exc}"
+            else:
+                # By choice, not by failure: no warning, and the record is
+                # evicted soon after the helper has collected it.
                 history_saved = False
-                history_error = f"Could not save transcript: {type(exc).__name__}: {exc}"
             current.update(
                 status="done",
                 progress=1.0,
@@ -351,6 +378,7 @@ def _run_job(job_id: str) -> None:
                 result=result,
                 history_saved=history_saved,
                 history_error=history_error,
+                ephemeral=not keep,
                 timestamps_unavailable=timestamps_unavailable,
             )
             _prune_jobs_locked()
@@ -391,7 +419,7 @@ def _run_job(job_id: str) -> None:
 
 def new_record(job_id: str, *, filename: str | None, size: int, model: str,
                language: str, timestamps: bool, turbo: bool, context: str,
-               path: Path) -> dict:
+               path: Path, source: str = "upload") -> dict:
     """A fresh queued job record for a staged upload."""
     return {
         "id": job_id,
@@ -406,6 +434,7 @@ def new_record(job_id: str, *, filename: str | None, size: int, model: str,
         "turbo": bool(turbo),
         "partial": None,
         "context": context,
+        "source": source,
         "path": str(path),
         "cancelled": threading.Event(),
         "created_at": time.time(),
