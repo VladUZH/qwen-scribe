@@ -6,12 +6,19 @@ details when clearly documented.
 
 ## [Unreleased]
 
-## [0.2.2-beta.1] - 2026-08-07
+## [0.2.2-beta.1] - 2026-09-04
 
 Everything in this release comes from one hands-on testing report on r/macapps
-from someone who ran real video files through v0.2.1-beta.1.
+from someone who ran real video files through v0.2.1-beta.1, plus what a full
+end-to-end test pass of the result turned up before tagging.
 
 ### Added
+
+- Several files can be dropped or chosen at once, and more can be added while
+  one is transcribing. They upload one after another and take their places in
+  the Queue in the order they arrived
+- A testing-report issue template, so a hands-on report like the one behind
+  this release has a place to land in the repository
 
 - A visible transcription queue. Every job is listed in the order the worker
   will reach it, with its position while it waits, a Cancel button that stops
@@ -60,6 +67,18 @@ from someone who ran real video files through v0.2.1-beta.1.
 
 ### Fixed
 
+- Quitting or stopping the app while a file was transcribing left the staged
+  copy of that file in the temporary folder, where it stayed until a later
+  start found it more than a day old. The copy a failed job keeps for Retry
+  stayed behind the same way. The server now removes every staged copy as it
+  shuts down. The cause: the worker's own cleanup never ran on a real quit,
+  because uvicorn re-raises the termination signal the moment the shutdown
+  hook returns, and only the queued jobs' files were being handled there
+- A file dropped while a larger one was still uploading silently abandoned
+  that upload: the page cancelled the in-flight request, a rule from the
+  days of one job at a time. Uploads now wait their turn instead
+- Dropping more than one file at once transcribed only the first, with no
+  message about the others
 - Word timestamps and SRT export now work for Japanese and Korean audio. The
   forced aligner needs the `nagisa` and `soynlp` tokenizers for those two
   languages; they were never installed, and the error told users to run a

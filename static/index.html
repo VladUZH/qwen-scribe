@@ -310,12 +310,12 @@
     <div class="runtime" id="runtime">Qwen3-ASR · MLX · Metal</div>
   </header>
 
-  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload audio or video file">
+  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload audio or video files">
     <h2>Drop audio or video here</h2>
-    <p>or click to choose a file — everything runs locally on this Mac</p>
+    <p>or click to choose files — everything runs locally on this Mac</p>
     <div class="formats" id="formats">wav · mp3 · m4a · mp4 · mov</div>
   </div>
-  <input type="file" id="file" accept="audio/*,video/*,.mkv,.opus,.qta">
+  <input type="file" id="file" multiple accept="audio/*,video/*,.mkv,.opus,.qta">
 
   <div class="options">
     <div class="field">
@@ -475,7 +475,31 @@
   let submissionSeq = 0;
   let pollFailures = 0;
   let allowedExtensions = null;
-  let uploadController = null;
+
+  // Files wait here for their turn to be POSTed, in the order they arrived.
+  // One upload at a time, and never abandoned: a second file dropped while a
+  // large first one is still uploading used to abort that upload silently,
+  // which is the opposite of what a queue is for.
+  const pendingUploads = [];
+  let uploading = false;
+
+  function enqueue(files) {
+    const list = [...(files || [])].filter(Boolean);
+    if (!list.length) return;
+    pendingUploads.push(...list);
+    if (!uploading) drainUploads();
+  }
+
+  async function drainUploads() {
+    uploading = true;
+    try {
+      while (pendingUploads.length) {
+        await submit(pendingUploads.shift());
+      }
+    } finally {
+      uploading = false;
+    }
+  }
 
   const stopPolling = () => {
     if (pollTimer) clearTimeout(pollTimer);
@@ -532,19 +556,21 @@
   drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } });
   ["dragover","dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("dragover"); }));
   ["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("dragover"); }));
-  drop.addEventListener("drop", e => { if (e.dataTransfer.files[0]) submit(e.dataTransfer.files[0]); });
+  // Every dropped file is queued, not just the first one.
+  drop.addEventListener("drop", e => enqueue(e.dataTransfer.files));
   // Clearing the input is what makes re-picking the same file fire "change"
-  // again; read the file out first, because blanking it empties .files.
+  // again; read the files out first, because blanking it empties .files.
   $("file").addEventListener("change", e => {
-    const file = e.target.files[0];
+    const files = [...e.target.files];
     e.target.value = "";
-    if (file) submit(file);
+    enqueue(files);
   });
 
+  // Uploads one file and starts polling its job. Called only from
+  // drainUploads, so two never run at once; the detail card follows the most
+  // recent one, and the Queue section below shows the whole batch.
   async function submit(file) {
     const seq = ++submissionSeq;
-    if (uploadController) uploadController.abort();
-    uploadController = null;
     const extension = (file.name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
     currentFile = file;
     lastResult = null;
@@ -584,16 +610,12 @@
     form.append("context", $("context").value);
 
     let res;
-    const controller = new AbortController();
-    uploadController = controller;
     try {
-      res = await fetch("/api/jobs", { method: "POST", body: form, signal: controller.signal });
+      res = await fetch("/api/jobs", { method: "POST", body: form });
     } catch {
-      if (uploadController === controller) uploadController = null;
       if (seq === submissionSeq) fail("Server unreachable. Is server.py still running?");
       return;
     }
-    if (uploadController === controller) uploadController = null;
     if (seq !== submissionSeq) return;   // a newer upload already took over
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));

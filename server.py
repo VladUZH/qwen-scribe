@@ -774,20 +774,24 @@ async def lifespan(app: FastAPI):
                     detail="Server stopped before this job finished",
                     finished_at=finished_at,
                 )
-        # executor.shutdown(cancel_futures=True) cancels work that never
-        # entered _run_job, so its finally block cannot remove those staged
-        # uploads. Snapshot them for explicit cancellation and cleanup.
-        pending = [
-            (future, Path(jobs[job_id]["path"]))
-            for job_id, future in job_futures.items()
-            if job_id in jobs and jobs[job_id].get("path")
-        ]
-    for future, path in pending:
-        if future.cancel():
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        # Every staged upload dies with the process, so remove them all here
+        # rather than trusting anything that runs later. The worker's own
+        # cleanup in _run_job never gets its turn on a real quit: uvicorn
+        # re-raises the SIGTERM it caught as soon as this lifespan returns,
+        # and the process is gone before the thread comes back from its
+        # model call. A failed job's copy, kept so Retry can reuse it, is dead
+        # too: the job it could be retried from lives only in this process.
+        staged = [Path(job["path"]) for job in jobs.values() if job.get("path")]
+        pending = list(job_futures.values())
+    # Work that never entered _run_job is dropped here; cancel_futures below
+    # would do the same, but cancelling first keeps the done-callbacks tidy.
+    for future in pending:
+        future.cancel()
+    for path in staged:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
     executor.shutdown(wait=False, cancel_futures=True)
 
 

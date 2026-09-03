@@ -20,7 +20,7 @@ Qwen Scribe transcribes audio and video with
 GPU. There is no account, API key, or Qwen Scribe cloud service. Audio and
 transcript text stay on the Mac.
 
-> **Project status:** `v0.2.1-beta.1`. Core transcription, history, and
+> **Project status:** `v0.2.2-beta.1`. Core transcription, history, and
 > dictation work. A downloadable beta build exists on the
 > [releases page](https://github.com/VladUZH/qwen-scribe/releases), where its
 > provenance notes state the exact signing and notarization status. An ad-hoc
@@ -126,7 +126,7 @@ browser tab open at all.
 | | |
 | --- | --- |
 | Maximum file size | **4 GB.** The upload is staged in a temporary folder before decoding, so one job briefly needs twice the file's size in free disk space. This is not a model limit — for a longer video, extract the audio track first: `ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 output.wav` |
-| Concurrency | One file at a time. Further uploads queue; the Queue list shows the order, and each entry can be cancelled, a failed one retried without re-uploading. Cancelling a waiting file is immediate; cancelling the one being transcribed takes effect when the current 30-second chunk finishes, since a model call cannot be interrupted part-way |
+| Concurrency | One file at a time. Drop several files at once, or more while one is running, and they queue in order; the Queue list shows that order, and each entry can be cancelled, a failed one retried without re-uploading. Cancelling a waiting file is immediate; cancelling the one being transcribed takes effect when the current 30-second chunk finishes, since a model call cannot be interrupted part-way |
 | Vocabulary hints | Up to 2000 characters, under **More options**. The hint is added to every chunk's prompt, so it is paid for once per chunk of the file |
 | Dictation settings | The push-to-talk key, model, and language live behind **Set up** on the dictation card, and apply within about ten seconds. They are separate from the model and language used for file transcription |
 | Languages | Automatic detection, or any of the fourteen Qwen3-ASR supports. Word timestamps for Japanese and Korean use the tokenizers shipped in `requirements-lock.txt`; if the aligner cannot run, the transcript is still produced and saved, without the `.srt` |
@@ -226,6 +226,16 @@ Push-to-talk ──> native macOS helper ──> temporary WAV ──> same job 
 
 The API serializes GPU jobs to avoid memory contention. Media is staged under a
 random temporary filename and removed when processing finishes.
+
+## Feedback
+
+Testing reports are what drive releases: the whole of v0.2.2 came from one
+person who ran real video files through the app and wrote down what happened.
+If you try Qwen Scribe, please file a
+[testing report](https://github.com/VladUZH/qwen-scribe/issues/new?template=testing_report.yml)
+with what you ran, on which Mac, and what did or did not work. Bugs and
+feature requests have their own templates. Remove private transcript text and
+paths before posting.
 
 ## Contributing and security
 

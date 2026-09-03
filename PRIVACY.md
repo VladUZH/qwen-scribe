@@ -21,8 +21,11 @@ key.
 - Downloaded model weights normally live in the Hugging Face cache, usually
   `~/.cache/huggingface/hub`.
 - Uploaded media is copied to a randomly named temporary file while a job runs
-  and is deleted when that job succeeds or fails. Files left by a hard crash
-  are removed after they are more than 24 hours old on a later server start.
+  and is deleted when that job succeeds or is cancelled. The copy for a job
+  that failed is kept for up to an hour so that Retry does not need the file
+  uploaded again, then deleted. Every staged copy is deleted when the server
+  stops, whether or not its job had finished. Files left by a hard crash are
+  removed after they are more than 24 hours old on a later server start.
 - Desktop dictation is recorded into a temporary WAV file and deleted after
   transcription or failure. Its completed transcript is saved in history like
   any other completed job.

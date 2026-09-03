@@ -895,6 +895,44 @@ class JobShutdownTests(unittest.TestCase):
         self.assertTrue(server.stopping.is_set())
         shutdown.assert_called_once_with(wait=False, cancel_futures=True)
 
+    def test_shutdown_removes_the_running_and_retained_uploads_too(self):
+        """A quit must not leave the user's media in the temp directory.
+
+        The worker's finally block is not a safe place for this: uvicorn
+        re-raises the caught SIGTERM once the lifespan has run, so on a real
+        quit the process dies before the worker returns from its model call.
+        A failed job's retained copy is equally dead, since the in-memory job
+        it could be retried from is gone.
+        """
+        with TemporaryDirectory() as directory:
+            running = Path(directory) / "running.wav"
+            retained = Path(directory) / "failed.wav"
+            finished = Path(directory) / "done.wav"
+            for path in (running, retained):
+                path.write_bytes(b"RIFF")
+            with mock.patch.object(server.executor, "submit"), mock.patch.object(
+                server.executor, "shutdown"
+            ):
+                with mock.patch.dict(
+                    server.jobs,
+                    {
+                        "a" * 12: {"id": "a" * 12, "status": "processing",
+                                   "path": str(running), "cancelled": Event()},
+                        "b" * 12: {"id": "b" * 12, "status": "error",
+                                   "path": str(retained)},
+                        # Its file is long gone; a missing path must not raise.
+                        "c" * 12: {"id": "c" * 12, "status": "done",
+                                   "path": str(finished)},
+                    },
+                    clear=True,
+                ):
+                    with TestClient(server.app, base_url=BASE_URL):
+                        pass
+                    self.assertFalse(running.exists())
+                    self.assertFalse(retained.exists())
+                    self.assertEqual(server.jobs["a" * 12]["status"], "error")
+                    self.assertEqual(server.jobs["b" * 12]["status"], "error")
+
     def test_shutdown_removes_upload_for_a_cancelled_queued_future(self):
         started = Event()
         release = Event()

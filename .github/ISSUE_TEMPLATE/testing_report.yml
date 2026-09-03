@@ -1,0 +1,73 @@
+name: Testing report
+description: You tried Qwen Scribe on real recordings. Tell us what happened, good and bad.
+title: "[Testing]: "
+labels: [testing-report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Hands-on reports are what releases are built from. Rough notes are fine; a list of what you ran and what happened beats a polished summary. Remove private transcript text, filenames, paths, and clipboard contents before posting.
+  - type: input
+    id: version
+    attributes:
+      label: Qwen Scribe version
+      placeholder: v0.2.2-beta.1, or the commit if built from source
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Mac, memory, and macOS version
+      placeholder: MacBook Pro M2 Pro 32 GB, macOS 15.6
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed it
+      options:
+        - Downloaded release zip
+        - Built from source with make app
+        - Ran ./run.sh from a terminal
+    validations:
+      required: true
+  - type: textarea
+    id: ran
+    attributes:
+      label: What you ran
+      description: File types and rough lengths, languages, model used, timestamps on or off, dictation or files or both.
+      placeholder: |
+        - Three .mp4 lecture recordings, 40 to 90 minutes, English, 1.7B, timestamps on
+        - Dictation in Mail and Slack for a day, right Command, 0.6B
+    validations:
+      required: true
+  - type: textarea
+    id: worked
+    attributes:
+      label: What worked
+    validations:
+      required: true
+  - type: textarea
+    id: broke
+    attributes:
+      label: What did not work, or surprised you
+      description: What you expected, what happened instead, and how often. Include timings if speed was the surprise.
+    validations:
+      required: true
+  - type: textarea
+    id: wish
+    attributes:
+      label: What you wished it did
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized log excerpt
+      description: Only the relevant lines from ~/Library/Logs/QwenScribe.log, with private paths removed.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I removed private audio, transcript, path, and clipboard data.
+          required: true
