@@ -4,7 +4,7 @@
 # fails CI when the exported file has drifted from it.
 [project]
 name = "qwen-scribe"
-version = "0.2.2"
+version = "0.3.0"
 description = "Private, local transcription and system-wide dictation for Apple Silicon."
 readme = "README.md"
 license = "Apache-2.0"

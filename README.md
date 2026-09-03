@@ -20,7 +20,7 @@ Qwen Scribe transcribes audio and video with
 GPU. There is no account, API key, or Qwen Scribe cloud service. Audio and
 transcript text stay on the Mac.
 
-> **Project status:** `v0.2.2-beta.1`. Core transcription, history, and
+> **Project status:** `v0.3.0-beta.1`. Core transcription, history, and
 > dictation work. A downloadable beta build exists on the
 > [releases page](https://github.com/VladUZH/qwen-scribe/releases), where its
 > provenance notes state the exact signing and notarization status. An ad-hoc

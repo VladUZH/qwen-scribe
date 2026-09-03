@@ -70,23 +70,23 @@ Dependabot dead end.
 
 **Claude**
 
-- [ ] `release/v0.2.2-beta.1`: update the README status line, the
+- [x] `release/v0.2.2-beta.1`: update the README status line, the
       `requirements-lock.txt` header comment, and the `[Unreleased]` link
       block in `CHANGELOG.md`; confirm `macos/QwenScribe-Info.plist` and
       `scripts/build_macos_apps.sh` already say `0.2.2`.
-- [ ] `fix/dependabot-pydantic-core`: bump `pydantic_core` to `2.46.5` next
+- [x] `fix/dependabot-pydantic-core` (superseded by `ci/uv-lock`, which moves the pair together): bump `pydantic_core` to `2.46.5` next
       to pydantic `2.13.5` on top of Dependabot's PR #18 (or close #18 and
       push the combined bump), so the macOS resolve step passes again. Add a
       comment in `.github/dependabot.yml` that the ignore rule means every
       pydantic bump needs a hand-bumped core until week 2's lock tooling
       lands.
-- [ ] `ci/dependabot-monthly`: switch the pip group to a monthly schedule.
+- [x] `ci/dependabot-monthly`: switch the pip group to a monthly schedule.
       Two of the last three bot PRs were closed unmerged; weekly is noise.
-- [ ] `docs/feedback-channel`: add a `.github/ISSUE_TEMPLATE/testing_report.yml`
+- [x] `docs/feedback-channel`: add a `.github/ISSUE_TEMPLATE/testing_report.yml`
       template shaped like the r/macapps report (what you ran, machine,
       what broke, what you expected), and a `FEEDBACK` section in the README
       pointing at it.
-- [ ] Draft the pinned "v0.2.2 beta: testing thread" issue text for the
+- [x] Draft the pinned "v0.2.2 beta: testing thread" issue text for the
       owner to post.
 
 **Owner**
@@ -115,7 +115,7 @@ safe, and make dependency updates resolve themselves.
 
 **Claude**
 
-- [ ] `refactor/server-package`: move `server.py` into a `qwen_scribe/`
+- [x] `refactor/server-package`: move `server.py` into a `qwen_scribe/`
       package with `config.py` (constants, paths, languages, hotkeys),
       `settings.py` (store, validators), `jobs.py` (store, worker, cancel,
       retry), `history.py` (transcripts, search, export), `api.py` (routes,
@@ -125,22 +125,22 @@ safe, and make dependency updates resolve themselves.
       the `Makefile`, `ci.yml`, and `release.yml` to copy and compile the
       package. Tests import the new modules; behaviour is unchanged and every
       existing test passes unmodified in intent.
-- [ ] `refactor/transcript-js`: extract `sentenceLines` and the SRT cue
+- [x] `refactor/transcript-js`: extract `sentenceLines` and the SRT cue
       builder from `static/index.html` into `static/transcript.js`, loaded by
       the page (CSP already allows same-origin scripts) and by
       `tests/js/transcript.test.mjs` under Node's built-in `node --test`. Add
       the Node step to `ci.yml`. No dependencies, no build step, in line with
       `CONTRIBUTING.md`.
-- [ ] `ci/uv-lock`: add `pyproject.toml` and `uv.lock` as the resolution
+- [x] `ci/uv-lock`: add `pyproject.toml` and `uv.lock` as the resolution
       source of truth; keep `requirements-lock.txt` as the artifact the
       launcher installs, regenerated with `uv export`, and add a CI step that
       fails when the two drift. Switch Dependabot to the `uv` ecosystem so
       pydantic and pydantic-core move together and the ignore rule can go.
-- [ ] `ci/macos-real-lock`: the macOS job installs `requirements-lock.txt`
+- [x] `ci/macos-real-lock`: the macOS job installs `requirements-lock.txt`
       for real (with a pip cache) and runs the test suite, so the one test
       that is skipped without MLX runs somewhere. Weights are still never
       downloaded.
-- [ ] `ci/release-dry-run`: add `workflow_dispatch` with a `dry_run` input to
+- [x] `ci/release-dry-run`: add `workflow_dispatch` with a `dry_run` input to
       `release.yml` that builds, signs, notarizes, and uploads the archive as
       a workflow artifact without touching releases. This is how the
       credentials get exercised before a real tag depends on them.
@@ -175,25 +175,25 @@ works while a key is physically held, and stops after 120 seconds
 
 **Claude**
 
-- [ ] `feat/dictation-dictionary`: new setting `dictation.dictionary`
+- [x] `feat/dictation-dictionary`: new setting `dictation.dictionary`
       (string, up to 2000 characters, same validator as `context`). The
       helper sends it as the `context` field. Web interface: a textarea in
       the dictation settings with the same copy style as "Domain vocabulary".
       Tests: round trip, limit, helper contract (`/api/settings` shape).
-- [ ] `feat/dictation-history-optout`: `dictation.save_history` (bool,
+- [x] `feat/dictation-history-optout`: `dictation.save_history` (bool,
       default true). Jobs submitted with `source=dictation` skip
       `_save_transcript` when it is false, report `history_saved: false`
       without an error, and are evicted from the in-memory store 60 seconds
       after the helper collects the result instead of after an hour, so
       dictated text does not linger. `PRIVACY.md` gains one paragraph.
-- [ ] `feat/dictation-toggle-mode`: `dictation.mode` in `{"hold","toggle"}`
+- [x] `feat/dictation-toggle-mode`: `dictation.mode` in `{"hold","toggle"}`
       (default `hold`). In toggle mode a press shorter than 400 ms starts
       recording and the next press stops it; a long press still behaves as
       hold. The cap becomes `dictation.max_seconds` (60 to 600, default 120
       for hold, 600 for toggle) and the HUD shows elapsed time in toggle
       mode. Menu bar gets a Mode submenu. The watchdog and the lost-key-up
       protection stay.
-- [ ] `feat/model-lifecycle`: three server changes that share one design.
+- [x] `feat/model-lifecycle`: three server changes that share one design.
       (1) Download progress: pre-fetch weights with
       `huggingface_hub.snapshot_download` and a tqdm subclass that writes
       "Downloading model 1.2 of 3.4 GB" into the job's `detail` and
@@ -225,7 +225,7 @@ CI and hand-tested.
 
 **Claude**
 
-- [ ] `feat/fn-hotkey`: an IOHIDManager listener for the physical Fn key
+- [x] `feat/fn-hotkey`: an IOHIDManager listener for the physical Fn key
       (Apple vendor top-case usage page, keyboard Fn usage), matched on the
       built-in keyboard and any external Apple keyboard that reports it. Fn
       appears in `DICTATION_HOTKEYS` and the helper table as `fn`, listed as
@@ -235,7 +235,7 @@ CI and hand-tested.
       arise because the physical key, not the synthesized flag, is watched.
       **Fallback:** if the listener is not reliable across the owner's
       keyboards by Thursday, ship `v0.3.0` without Fn and carry it to 0.3.1.
-- [ ] `feat/dictation-cleanups`: server-side, for `source=dictation` jobs
+- [x] `feat/dictation-cleanups`: server-side, for `source=dictation` jobs
       only. Spoken commands (`dictation.spoken_commands`, default true):
       "new line", "new paragraph", "period", "comma", "question mark" in the
       dictation language when it is English, with a table designed so other
@@ -245,11 +245,11 @@ CI and hand-tested.
       Settings UI: a small two-column editor. Tests: each command, boundary
       cases, replacement ordering, and that file transcription is never
       touched by any of it.
-- [ ] `feat/launch-at-login`: `SMAppService.mainApp` register and unregister
+- [x] `feat/launch-at-login`: `SMAppService.mainApp` register and unregister
       from a menu item with a check mark that reflects the real state on each
       menu open. Documented note that the app should live in `/Applications`
       for the login item to survive moves.
-- [ ] `release/v0.3.0-beta.1`: changelog, README (dictation section
+- [x] `release/v0.3.0-beta.1`: changelog, README (dictation section
       rewritten around dictionary, modes, and keys), `PRIVACY.md` (history
       opt-out, dictionary storage), `ROADMAP.md` (tick the shipped v0.3
       items), version bump to `0.3.0` in the plist and build script.
