@@ -391,7 +391,7 @@ wheels = [
 
 [[package]]
 name = "qwen-scribe"
-version = "0.2.2"
+version = "0.3.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
