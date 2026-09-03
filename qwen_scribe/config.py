@@ -75,6 +75,20 @@ DICTATION_HOTKEYS = {
     "right_control": "Right ⌃",
 }
 
+# How the push-to-talk key is used. Hold records while the key is down.
+# Toggle starts on a tap and stops on the next; a press held longer than a
+# tap still behaves as hold, so the two share muscle memory. The ids must
+# match native/DictationHelper.m.
+DICTATION_MODES = {
+    "hold": "Hold to talk",
+    "toggle": "Press to start, press to stop",
+}
+# The recording watchdog: a key-up that never arrives, or a toggle nobody
+# ends, must not leave the microphone open forever.
+DICTATION_MIN_SECONDS = 60
+DICTATION_MAX_SECONDS = 600
+DICTATION_DEFAULT_SECONDS = 120
+
 ALLOWED_SUFFIXES = {
     # audio
     ".wav", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".aac", ".wma", ".aiff",

@@ -47,7 +47,9 @@ transcript text stay on the Mac.
   individual delete, and delete-all controls
 - Hold the configured **push-to-talk key** (right Command by default; right
   Option or right Control if you prefer) in any text field, speak, then
-  release to transcribe locally and paste at the cursor
+  release to transcribe locally and paste at the cursor. Or switch to
+  press-to-start, press-to-stop for longer dictation, with the HUD counting
+  the seconds
 - Menu-bar status item with the dictation state, a push-to-talk key picker,
   and explicit restart and quit controls
 - A non-focus-stealing HUD for **Listening**, **Transcribing**, success, and
@@ -129,7 +131,7 @@ browser tab open at all.
 | Maximum file size | **4 GB.** The upload is staged in a temporary folder before decoding, so one job briefly needs twice the file's size in free disk space. This is not a model limit — for a longer video, extract the audio track first: `ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 output.wav` |
 | Concurrency | One file at a time. Drop several files at once, or more while one is running, and they queue in order; the Queue list shows that order, and each entry can be cancelled, a failed one retried without re-uploading. Cancelling a waiting file is immediate; cancelling the one being transcribed takes effect when the current 30-second chunk finishes, since a model call cannot be interrupted part-way |
 | Vocabulary hints | Up to 2000 characters, under **More options**. The hint is added to every chunk's prompt, so it is paid for once per chunk of the file |
-| Dictation settings | The push-to-talk key, model, language, dictionary, and history choice live behind **Set up** on the dictation card, and apply within about ten seconds. The dictionary is names and terms you dictate often; it is sent with every dictation as the model's vocabulary hint. Switch off **Save dictations to history** to keep dictations out of the saved transcripts entirely. These are separate from the model, language, and vocabulary used for file transcription |
+| Dictation settings | The push-to-talk key, mode, longest recording, model, language, dictionary, and history choice live behind **Set up** on the dictation card, and apply within about ten seconds. In **Hold to talk** the key records while held; in **Press to start, press to stop** a tap starts and the next tap stops, while a press held longer than a tap still works as hold. A recording is stopped on its own at the configured limit, two minutes by default and ten at most. The dictionary is names and terms you dictate often; it is sent with every dictation as the model's vocabulary hint. Switch off **Save dictations to history** to keep dictations out of the saved transcripts entirely. These are separate from the model, language, and vocabulary used for file transcription |
 | Languages | Automatic detection, or any of the fourteen Qwen3-ASR supports. Word timestamps for Japanese and Korean use the tokenizers shipped in `requirements-lock.txt`; if the aligner cannot run, the transcript is still produced and saved, without the `.srt` |
 
 ## Desktop dictation permissions

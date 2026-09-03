@@ -55,7 +55,10 @@ dictation can run without a network connection.
 
 Desktop dictation is optional and requests:
 
-- **Microphone:** records only while the configured push-to-talk key is held.
+- **Microphone:** records only while the configured push-to-talk key is held,
+  or, in press-to-start mode, between the tap that starts a recording and the
+  tap that stops it. Either way a recording is stopped on its own at the
+  configured limit: two minutes by default, ten at most.
 - **Input Monitoring:** the native helper subscribes to modifier-change events
   and reacts only to the configured right-side modifier key: Command, Option,
   or Control. It does not implement a text key logger.

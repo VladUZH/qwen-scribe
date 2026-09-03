@@ -357,7 +357,7 @@
     <kbd id="dictationKey">Right ⌘</kbd>
     <div class="dictation-copy">
       <span class="dictation-title">Desktop dictation</span>
-      <span class="dictation-lede">Hold in any text field to record; release to transcribe and paste.</span>
+      <span class="dictation-lede" id="dictationLede">Hold in any text field to record; release to transcribe and paste.</span>
       <p class="dictation-permissions" id="dictationPermissions" hidden></p>
     </div>
     <div class="dictation-status" id="dictationStatus">starting</div>
@@ -377,6 +377,20 @@
     <div class="field">
       <label for="setLanguage">Dictation language</label>
       <select id="setLanguage"></select>
+    </div>
+    <div class="field">
+      <label for="setMode">Mode</label>
+      <select id="setMode"></select>
+    </div>
+    <div class="field">
+      <label for="setMaxSeconds">Longest recording</label>
+      <select id="setMaxSeconds">
+        <option value="60">1 minute</option>
+        <option value="120">2 minutes</option>
+        <option value="180">3 minutes</option>
+        <option value="300">5 minutes</option>
+        <option value="600">10 minutes</option>
+      </select>
     </div>
     <div class="field field-wide">
       <label for="setDictionary">Dictionary</label>
@@ -1010,6 +1024,14 @@
   // ── Dictation settings ────────────────────────────────────────────────
   const HOTKEY_LABELS = {};
   const MODEL_LABELS = { "1.7b": "1.7B — accuracy", "0.6b": "0.6B — speed" };
+
+  // The one-line instruction on the card follows the mode, so it never tells
+  // someone to hold a key the helper is waiting for them to tap.
+  function describeMode(mode) {
+    $("dictationLede").textContent = mode === "toggle"
+      ? "Press once in any text field to start recording; press again to transcribe and paste."
+      : "Hold in any text field to record; release to transcribe and paste.";
+  }
   const settingsNote = $("settingsNote");
   const defaultSettingsNote = settingsNote.textContent;
 
@@ -1047,6 +1069,9 @@
     fill($("setHotkey"), body.options.hotkeys, body.dictation.hotkey);
     fill($("setModel"), body.options.models, body.dictation.model);
     fill($("setLanguage"), body.options.languages, body.dictation.language);
+    fill($("setMode"), body.options.modes, body.dictation.mode);
+    $("setMaxSeconds").value = String(body.dictation.max_seconds);
+    describeMode(body.dictation.mode);
     // Same guard as the vocabulary field: a resync must not overwrite an edit
     // still inside its debounce.
     if (dictionarySaveTimer === null) $("setDictionary").value = body.dictation.dictionary || "";
@@ -1130,6 +1155,7 @@
       const body = await res.json();
       if (seq !== settingsSeq) return;
       $("dictationKey").textContent = HOTKEY_LABELS[body.dictation.hotkey] || $("dictationKey").textContent;
+      describeMode(body.dictation.mode);
       settingsNote.textContent = "Saved. " + defaultSettingsNote;
     } catch {
       if (seq !== settingsSeq) return;
@@ -1141,6 +1167,9 @@
   [["setHotkey", "hotkey"], ["setModel", "model"], ["setLanguage", "language"]].forEach(([id, key]) =>
     $(id).addEventListener("change", e => saveSetting(key, e.target.value)));
   $("setSaveHistory").addEventListener("change", e => saveSetting("save_history", e.target.checked));
+  $("setMode").addEventListener("change", e => saveSetting("mode", e.target.value));
+  // The server wants a number of seconds, not the select's string.
+  $("setMaxSeconds").addEventListener("change", e => saveSetting("max_seconds", Number(e.target.value)));
   let dictionarySaveTimer = null;
   $("setDictionary").addEventListener("input", () => {
     clearTimeout(dictionarySaveTimer);   // one write per pause, not per keystroke
@@ -1319,6 +1348,7 @@
       // The hotkey can also change from the menu bar; the status poll keeps
       // the badge honest either way.
       if (state.shortcut) $("dictationKey").textContent = state.shortcut;
+      if (state.mode) describeMode(state.mode);
     } catch {
       status.textContent = "not running";
       status.classList.remove("ready");

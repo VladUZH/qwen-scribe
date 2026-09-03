@@ -144,8 +144,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json()["dictation"],
-            {"hotkey": "right_control", "model": config.DEFAULT_MODEL, "language": "German",
-             "dictionary": "", "save_history": True},
+            {**settings.DEFAULT_SETTINGS["dictation"], "hotkey": "right_control", "language": "German"},
         )
         # What lands on disk is what a restarted server would load.
         self.assertEqual(settings._load_settings()["dictation"]["hotkey"], "right_control")
@@ -229,6 +228,26 @@ class SettingsTests(unittest.TestCase):
             {"dictation": {"dictionary": "x" * (config.MAX_CONTEXT_CHARS + 1)}},
             {"dictation": {"dictionary": ["EBITDA"]}},
             {"dictation": {"save_history": "no"}},
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.client.put("/api/settings", json=payload).status_code, 400)
+
+    def test_mode_and_recording_limit_round_trip_within_bounds(self):
+        body = self.client.put(
+            "/api/settings", json={"dictation": {"mode": "toggle", "max_seconds": 300}}
+        ).json()
+        self.assertEqual(body["dictation"]["mode"], "toggle")
+        self.assertEqual(body["dictation"]["max_seconds"], 300)
+        self.assertEqual([m["id"] for m in body["options"]["modes"]], ["hold", "toggle"])
+        status = self.client.get("/api/dictation/status").json()
+        self.assertEqual((status["mode"], status["max_seconds"]), ("toggle", 300))
+        for payload in (
+            {"dictation": {"mode": "sometimes"}},
+            {"dictation": {"max_seconds": config.DICTATION_MIN_SECONDS - 1}},
+            {"dictation": {"max_seconds": config.DICTATION_MAX_SECONDS + 1}},
+            {"dictation": {"max_seconds": "120"}},
+            {"dictation": {"max_seconds": True}},
+            {"dictation": {"max_seconds": 120.0}},
         ):
             with self.subTest(payload=payload):
                 self.assertEqual(self.client.put("/api/settings", json=payload).status_code, 400)

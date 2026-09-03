@@ -21,6 +21,9 @@ DEFAULT_SETTINGS = {
         "hotkey": "right_command",
         "model": config.DEFAULT_MODEL,
         "language": "auto",
+        "mode": "hold",
+        # The longest one recording may run before the helper stops it.
+        "max_seconds": config.DICTATION_DEFAULT_SECONDS,
         # Names and terms the model should expect; sent as the vocabulary
         # hint with every dictation, which is where Qwen3-ASR's hint support
         # earns its keep.
@@ -57,6 +60,13 @@ def _short_text(value) -> bool:
     return isinstance(value, str) and len(value) <= config.MAX_CONTEXT_CHARS
 
 
+def _seconds_between(low: int, high: int):
+    # bool is an int subclass: True must not pass as one second.
+    return lambda value: (
+        isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+    )
+
+
 # Per-section, per-key value validators. A key absent from its section's map
 # is rejected outright, so a typo can never be silently persisted.
 _SECTION_VALIDATORS = {
@@ -64,6 +74,8 @@ _SECTION_VALIDATORS = {
         "hotkey": _one_of(config.DICTATION_HOTKEYS),
         "model": _one_of(config.MODELS),
         "language": _one_of(config.LANGUAGES),
+        "mode": _one_of(config.DICTATION_MODES),
+        "max_seconds": _seconds_between(config.DICTATION_MIN_SECONDS, config.DICTATION_MAX_SECONDS),
         "dictionary": _short_text,
         "save_history": _boolean,
     },
@@ -152,6 +164,10 @@ def response() -> dict:
             "hotkeys": [
                 {"id": key, "label": label}
                 for key, label in config.DICTATION_HOTKEYS.items()
+            ],
+            "modes": [
+                {"id": key, "label": label}
+                for key, label in config.DICTATION_MODES.items()
             ],
             "models": list(config.MODELS.keys()),
             "languages": config.LANGUAGES,

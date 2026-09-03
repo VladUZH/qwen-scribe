@@ -40,9 +40,15 @@ static const QSHotkeySpec *QSHotkeyForIdentifier(NSString *identifier) {
     return &QSHotkeyTable[0];   // right Command, the historical default
 }
 
-// A held key that is never released (a lost key-up, a Space switch) must not
-// leave dictation recording forever.
-static const NSTimeInterval QSMaximumRecordingSeconds = 120.0;
+// A held key that is never released (a lost key-up, a Space switch), or a
+// toggle nobody ends, must not leave dictation recording forever. The limit
+// comes from the settings; these are its default and its bounds, matching
+// DICTATION_*_SECONDS in the server's config.
+static const NSTimeInterval QSDefaultMaximumRecordingSeconds = 120.0;
+static const NSTimeInterval QSMinimumRecordingLimit = 60.0;
+static const NSTimeInterval QSMaximumRecordingLimit = 600.0;
+// In toggle mode a press shorter than this is a tap; a longer one is a hold.
+static const NSTimeInterval QSToggleTapSeconds = 0.4;
 
 static void QSAppendString(NSMutableData *data, NSString *string) {
     [data appendData:[string dataUsingEncoding:NSUTF8StringEncoding]];
@@ -59,6 +65,8 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 @property (nonatomic) QSHUDState state;
 @property (nonatomic) CGFloat phase;
 @property (nonatomic, strong) NSTimer *animationTimer;
+// Small text after the label: the elapsed time of a toggled recording.
+@property (nonatomic, copy) NSString *detail;
 - (void)showState:(QSHUDState)state;
 - (void)stopAnimating;
 @end
@@ -70,6 +78,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 - (void)showState:(QSHUDState)state {
     self.state = state;
     self.phase = 0;
+    self.detail = nil;
     [self.animationTimer invalidate];
     self.animationTimer = nil;
     if (state == QSHUDStateListening || state == QSHUDStateTranscribing) {
@@ -157,6 +166,15 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     };
     NSSize textSize = [label sizeWithAttributes:attributes];
     [label drawAtPoint:NSMakePoint(textX, centerY - textSize.height / 2) withAttributes:attributes];
+    if (self.detail.length) {
+        NSDictionary *detailAttributes = @{
+            NSFontAttributeName: [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightMedium],
+            NSForegroundColorAttributeName: [NSColor colorWithWhite:0.96 alpha:0.7],
+        };
+        NSSize detailSize = [self.detail sizeWithAttributes:detailAttributes];
+        [self.detail drawAtPoint:NSMakePoint(textX + textSize.width + 7, centerY - detailSize.height / 2)
+                  withAttributes:detailAttributes];
+    }
 }
 
 @end
@@ -256,6 +274,15 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 @property (nonatomic, copy) NSString *dictationLanguage;
 // Names and terms from the settings, sent as the model's vocabulary hint.
 @property (nonatomic, copy) NSString *dictationDictionary;
+// "hold" or "toggle"; ids match DICTATION_MODES in the server's config.
+@property (nonatomic, copy) NSString *dictationMode;
+@property (nonatomic) NSTimeInterval maximumRecordingSeconds;
+// Toggle mode: when the starting press began, to tell a tap from a hold.
+@property (nonatomic, strong) NSDate *pressStartedAt;
+// Toggle mode: the release of the press that stopped a recording is not a
+// new instruction.
+@property (nonatomic) BOOL ignoreNextRelease;
+@property (nonatomic, strong) NSTimer *elapsedTimer;
 @property (nonatomic) BOOL serverReachable;
 @property (nonatomic) BOOL serverTransitionInProgress;
 @property (atomic) BOOL shuttingDown;
@@ -327,6 +354,8 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     self.dictationModel = @"1.7b";
     self.dictationLanguage = @"auto";
     self.dictationDictionary = @"";
+    self.dictationMode = @"hold";
+    self.maximumRecordingSeconds = QSDefaultMaximumRecordingSeconds;
     self.hud = [[QSDictationHUD alloc] init];
     [self writeProcessIdentity];
     [self installTerminationHandler];
@@ -380,6 +409,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     self.localMonitor = nil;
     [self.heartbeatTimer invalidate];
     [self.recordingWatchdog invalidate];
+    [self.elapsedTimer invalidate];
     if (self.recordingURL) {
         [[NSFileManager defaultManager] removeItemAtURL:self.recordingURL error:nil];
         self.recordingURL = nil;
@@ -428,8 +458,31 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     BOOL isDown = (event.modifierFlags & self.hotkey->mask) != 0;
     if (isDown == self.hotkeyIsDown) return;
     self.hotkeyIsDown = isDown;
-    if (isDown) [self beginRecording];
-    else [self finishRecording];
+    if (![self.dictationMode isEqualToString:@"toggle"]) {
+        if (isDown) [self beginRecording];
+        else [self finishRecording];
+        return;
+    }
+    // Toggle: a tap starts, the next tap stops. A press held longer than a
+    // tap still behaves as hold-to-talk, so the two modes share muscle memory.
+    if (isDown) {
+        if (self.recorder) {
+            [self finishRecording];
+            self.ignoreNextRelease = YES;
+        } else {
+            self.pressStartedAt = [NSDate date];
+            [self beginRecording];
+        }
+        return;
+    }
+    if (self.ignoreNextRelease) {
+        self.ignoreNextRelease = NO;
+        return;
+    }
+    if (self.recorder && self.pressStartedAt
+        && -[self.pressStartedAt timeIntervalSinceNow] >= QSToggleTapSeconds) {
+        [self finishRecording];   // held, not tapped
+    }
 }
 
 - (void)beginRecording {
@@ -472,22 +525,43 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     [self.hud showState:QSHUDStateListening];
     [self playSound:@"Tink"];
 
-    // If the key-up never arrives, stop on our own rather than record forever.
-    [self.recordingWatchdog invalidate];
     __weak typeof(self) weakSelf = self;
-    self.recordingWatchdog = [NSTimer scheduledTimerWithTimeInterval:QSMaximumRecordingSeconds
+    // If the key-up never arrives, or a toggle is never ended, stop on our
+    // own rather than record forever.
+    [self.recordingWatchdog invalidate];
+    self.recordingWatchdog = [NSTimer scheduledTimerWithTimeInterval:self.maximumRecordingSeconds
                                                              repeats:NO
                                                                block:^(NSTimer *timer) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf.recorder) return;
         strongSelf.hotkeyIsDown = NO;
+        strongSelf.ignoreNextRelease = NO;
         [strongSelf finishRecording];
     }];
+    // A toggled recording has no held key to remind the user it is running,
+    // so the HUD counts the seconds instead.
+    [self.elapsedTimer invalidate];
+    self.elapsedTimer = nil;
+    if ([self.dictationMode isEqualToString:@"toggle"]) {
+        self.elapsedTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                            repeats:YES
+                                                              block:^(NSTimer *timer) {
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf.recorder || !strongSelf.recordingStartedAt) return;
+            NSInteger seconds = (NSInteger)(-[strongSelf.recordingStartedAt timeIntervalSinceNow]);
+            strongSelf.hud.view.detail = [NSString stringWithFormat:@"%ld:%02ld",
+                                          (long)(seconds / 60), (long)(seconds % 60)];
+            strongSelf.hud.view.needsDisplay = YES;
+        }];
+    }
 }
 
 - (void)finishRecording {
     [self.recordingWatchdog invalidate];
     self.recordingWatchdog = nil;
+    [self.elapsedTimer invalidate];
+    self.elapsedTimer = nil;
+    self.pressStartedAt = nil;
     if (!self.recorder || !self.recordingURL) return;
     [self.recorder stop];
     self.recorder = nil;
@@ -819,6 +893,15 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     if ([language isKindOfClass:NSString.class]) self.dictationLanguage = language;
     NSString *dictionary = dictation[@"dictionary"];
     if ([dictionary isKindOfClass:NSString.class]) self.dictationDictionary = dictionary;
+    NSString *mode = dictation[@"mode"];
+    // Like the key, never changed under an active recording: the gesture
+    // that started it must be the one that stops it.
+    if ([mode isKindOfClass:NSString.class] && !self.recorder) self.dictationMode = mode;
+    NSNumber *limit = dictation[@"max_seconds"];
+    if ([limit isKindOfClass:NSNumber.class]) {
+        self.maximumRecordingSeconds = MIN(MAX(limit.doubleValue, QSMinimumRecordingLimit),
+                                           QSMaximumRecordingLimit);
+    }
     NSString *hotkeyIdentifier = dictation[@"hotkey"];
     if ([hotkeyIdentifier isKindOfClass:NSString.class]) {
         const QSHotkeySpec *spec = QSHotkeyForIdentifier(hotkeyIdentifier);
@@ -878,7 +961,9 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     BOOL inputMonitoring = CGPreflightListenEventAccess();
     BOOL microphone = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio] == AVAuthorizationStatusAuthorized;
     if (accessibility && inputMonitoring && microphone) {
-        return [NSString stringWithFormat:@"Dictation ready — hold %@", @(self.hotkey->label)];
+        BOOL toggle = [self.dictationMode isEqualToString:@"toggle"];
+        return [NSString stringWithFormat:@"Dictation ready — %@ %@",
+                toggle ? @"press" : @"hold", @(self.hotkey->label)];
     }
     return @"Dictation: grant access in System Settings";
 }
@@ -914,6 +999,26 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     hotkeyRoot.submenu = hotkeyMenu;
     [menu addItem:hotkeyRoot];
 
+    NSMenuItem *modeRoot = [[NSMenuItem alloc] initWithTitle:@"Dictation Mode"
+                                                      action:nil keyEquivalent:@""];
+    NSMenu *modeMenu = [[NSMenu alloc] init];
+    modeMenu.autoenablesItems = NO;
+    NSArray<NSArray<NSString *> *> *modes = @[
+        @[@"hold", @"Hold to Talk"],
+        @[@"toggle", @"Press to Start, Press to Stop"],
+    ];
+    for (NSArray<NSString *> *entry in modes) {
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:entry[1]
+                                                      action:@selector(selectMode:) keyEquivalent:@""];
+        item.target = self;
+        item.representedObject = entry[0];
+        item.state = [self.dictationMode isEqualToString:entry[0]] ? NSControlStateValueOn : NSControlStateValueOff;
+        item.enabled = self.serverReachable;
+        [modeMenu addItem:item];
+    }
+    modeRoot.submenu = modeMenu;
+    [menu addItem:modeRoot];
+
     [menu addItem:NSMenuItem.separatorItem];
     NSMenuItem *restart = [[NSMenuItem alloc] initWithTitle:@"Restart Server"
                                                      action:@selector(restartServer:) keyEquivalent:@""];
@@ -935,6 +1040,13 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     NSString *identifier = sender.representedObject;
     if ([identifier isKindOfClass:NSString.class]) {
         [self pushDictationSetting:@"hotkey" value:identifier];
+    }
+}
+
+- (void)selectMode:(NSMenuItem *)sender {
+    NSString *identifier = sender.representedObject;
+    if ([identifier isKindOfClass:NSString.class]) {
+        [self pushDictationSetting:@"mode" value:identifier];
     }
 }
 
@@ -1019,6 +1131,9 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
         }
         [strongSelf.recordingWatchdog invalidate];
         strongSelf.recordingWatchdog = nil;
+        [strongSelf.elapsedTimer invalidate];
+        strongSelf.elapsedTimer = nil;
+        strongSelf.pressStartedAt = nil;
         strongSelf.recordingURL = nil;
         strongSelf.recorder = nil;
         strongSelf.recordingStartedAt = nil;

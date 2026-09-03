@@ -16,6 +16,13 @@ details when clearly documented.
   transcribed and pasted as before but never written to disk; the text is
   held in memory only until the helper has collected it, at most a minute.
   Uploaded files are unaffected by the choice
+- A press-to-start, press-to-stop dictation mode, chosen behind **Set up** or
+  in the menu bar. A tap starts recording, the next tap stops it, and a press
+  held longer than a tap still behaves as hold-to-talk. While a toggled
+  recording runs the HUD counts the seconds, since there is no held key to
+  remind you it is on
+- The longest one dictation may run is now a setting, from one minute to ten,
+  two by default; it was a fixed two minutes
 
 ## [0.2.2-beta.1] - 2026-09-04
 

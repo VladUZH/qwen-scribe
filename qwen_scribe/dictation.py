@@ -47,6 +47,8 @@ def status() -> dict:
         "microphone": state["microphone"],
         "hotkey": dictation["hotkey"],
         "shortcut": config.DICTATION_HOTKEYS[dictation["hotkey"]],
+        "mode": dictation["mode"],
+        "max_seconds": dictation["max_seconds"],
         "model": dictation["model"],
         "language": dictation["language"],
     }
