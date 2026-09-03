@@ -1,0 +1,23 @@
+# The dependency source of truth. `uv lock` resolves it into uv.lock, and
+# `make lock` exports that into requirements-lock.txt, which the launcher and
+# ./run.sh install with pip. Dependabot updates uv.lock; scripts/check_lock.py
+# fails CI when the exported file has drifted from it.
+[project]
+name = "qwen-scribe"
+version = "0.2.2"
+description = "Private, local transcription and system-wide dictation for Apple Silicon."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+  "mlx-qwen3-asr[aligner]==0.3.5",
+  "fastapi==0.141.1",
+  "uvicorn==0.52.1",
+  "python-multipart==0.0.32",
+]
+
+[tool.uv]
+# The app only runs on Apple Silicon Macs; resolving for other platforms would
+# pull in CPU and CUDA backends nobody installs from this lock.
+environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]
+package = false

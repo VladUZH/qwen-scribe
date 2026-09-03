@@ -41,6 +41,10 @@ jobs:
         run: node --test tests/js/transcript.test.mjs
       - name: Check publishable source
         run: python scripts/check_repo.py
+      - name: Check the dependency lock agrees with uv.lock
+        run: |
+          python -m pip install --disable-pip-version-check "uv==0.8.17"
+          python scripts/export_lock.py --check
       - name: Compile Python sources
         env:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/qwen-scribe-pycache

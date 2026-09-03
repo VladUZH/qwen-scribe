@@ -187,6 +187,7 @@ Mac app starts:
 make setup       # create .venv and install the reviewed dependency lock
 make test        # run lightweight API/history tests without model weights
 make check       # tests, source compilation, and publication hygiene
+make lock        # re-resolve pyproject.toml with uv and export requirements-lock.txt
 make app         # build ad-hoc-signed app bundles in dist/
 make package     # create a beta release zip in dist/
 ```
