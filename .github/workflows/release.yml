@@ -36,7 +36,7 @@ jobs:
           python -m unittest discover -s tests
           bash -n run.sh scripts/*.sh macos/*.sh
           python scripts/check_repo.py
-          python -m compileall -q server.py quantize_8bit.py compare_models.py tests
+          python -m compileall -q server.py qwen_scribe quantize_8bit.py compare_models.py tests
 
       - name: Derive versions from the tag
         id: version

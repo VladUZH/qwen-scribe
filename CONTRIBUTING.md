@@ -48,7 +48,11 @@ terms unless explicitly stated otherwise.
 
 ## Code map
 
-- `server.py`: localhost API, queue, model sessions, and transcript persistence
+- `server.py`: the entry point that runs the application
+- `qwen_scribe/`: the application — `config` (paths, limits, tables),
+  `settings` (persisted settings), `sessions` (model sessions), `jobs` (job
+  store, worker, cancel/retry/shutdown), `history` (transcripts, search,
+  export), `dictation` (helper heartbeat), `api` (routes and middleware)
 - `static/index.html`: dependency-free browser interface
 - `native/DictationHelper.m`: global shortcut, recording, HUD, and paste bridge
 - `macos/`: tracked app launchers and property-list sources

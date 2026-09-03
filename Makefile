@@ -25,7 +25,7 @@ lint-sh:
 
 check: test lint-sh
 	$(PYTHON) scripts/check_repo.py
-	PYTHONPYCACHEPREFIX="$(CURDIR)/.build/pycache" $(PYTHON) -m compileall -q server.py quantize_8bit.py compare_models.py tests
+	PYTHONPYCACHEPREFIX="$(CURDIR)/.build/pycache" $(PYTHON) -m compileall -q server.py qwen_scribe quantize_8bit.py compare_models.py tests
 
 app:
 	./scripts/build_macos_apps.sh

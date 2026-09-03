@@ -37,6 +37,9 @@ cp "$ROOT/macos/QwenScribe-Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/assets/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/server.py" "$ROOT/requirements.txt" "$ROOT/requirements-lock.txt" "$APP/Contents/Resources/"
 cp -R "$ROOT/static/." "$APP/Contents/Resources/static/"
+cp -R "$ROOT/qwen_scribe" "$APP/Contents/Resources/qwen_scribe"
+# Bytecode from a developer checkout must not ship inside the bundle.
+find "$APP/Contents/Resources/qwen_scribe" -name __pycache__ -type d -prune -exec rm -rf {} +
 
 cp "$ROOT/macos/stop.sh" "$STOP_APP/Contents/MacOS/StopQwenScribe"
 cp "$ROOT/macos/StopQwenScribe-Info.plist" "$STOP_APP/Contents/Info.plist"
