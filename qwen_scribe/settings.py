@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import threading
 
-from . import config
+from . import cleanup, config
 
 SETTINGS_FILE = config.APP_DATA_DIR / "settings.json"
 settings_lock = threading.Lock()
@@ -32,6 +32,11 @@ DEFAULT_SETTINGS = {
         # unless this is off, in which case it exists only long enough for
         # the helper to collect and paste it.
         "save_history": True,
+        # "new line" and "new paragraph", spoken on their own, become breaks.
+        "spoken_commands": True,
+        # [{"from": what was said, "to": what to paste}], whole words,
+        # case-insensitive; see cleanup.apply_replacements.
+        "replacements": [],
     },
     # The file-transcription pane's choices. Kept on the server rather than in
     # the browser so they survive a cleared cache and a different browser.
@@ -87,6 +92,8 @@ _SECTION_VALIDATORS = {
         "max_seconds": _seconds_between(config.DICTATION_MIN_SECONDS, config.DICTATION_MAX_SECONDS),
         "dictionary": _short_text,
         "save_history": _boolean,
+        "spoken_commands": _boolean,
+        "replacements": cleanup.valid_replacements,
     },
     "transcription": {
         "model": _one_of(config.MODELS),

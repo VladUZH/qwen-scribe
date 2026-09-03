@@ -400,6 +400,15 @@
       <input type="checkbox" id="setSaveHistory">
       <label for="setSaveHistory">Save dictations to history <span class="hint">off keeps each one only until it is pasted</span></label>
     </div>
+    <div class="check plain field-wide">
+      <input type="checkbox" id="setCommands">
+      <label for="setCommands">Spoken commands <span class="hint">“new line” and “new paragraph”, said on their own, become breaks</span></label>
+    </div>
+    <div class="field field-wide">
+      <label for="setReplacements">Replacements</label>
+      <textarea id="setReplacements" rows="3" placeholder="One per line: what you say => what to paste, e.g. my email => sam@example.com"></textarea>
+      <div class="settings-note" id="replacementsNote"></div>
+    </div>
     <div class="field">
       <label for="setUnload">Unload idle models after</label>
       <select id="setUnload">
@@ -1090,6 +1099,11 @@
     // still inside its debounce.
     if (dictionarySaveTimer === null) $("setDictionary").value = body.dictation.dictionary || "";
     $("setSaveHistory").checked = body.dictation.save_history !== false;
+    $("setCommands").checked = body.dictation.spoken_commands !== false;
+    if (replacementsSaveTimer === null) {
+      $("setReplacements").value = (body.dictation.replacements || [])
+        .map(r => `${r.from} => ${r.to}`).join("\n");
+    }
     const unload = String(body.performance.unload_after_minutes);
     if (![...$("setUnload").options].some(o => o.value === unload)) {
       // A value set by hand outside the presets is shown rather than hidden.
@@ -1192,6 +1206,33 @@
     $(id).addEventListener("change", e => saveSetting(key, e.target.value)));
   $("setSaveHistory").addEventListener("change", e => saveSetting("save_history", e.target.checked));
   $("setMode").addEventListener("change", e => saveSetting("mode", e.target.value));
+  $("setCommands").addEventListener("change", e => saveSetting("spoken_commands", e.target.checked));
+  // "what you say => what to paste", one per line. A line without the arrow
+  // is reported rather than silently dropped, and nothing is saved until
+  // every line parses.
+  let replacementsSaveTimer = null;
+  function parseReplacements(text) {
+    const rules = [];
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      const at = line.indexOf("=>");
+      const from = at < 0 ? "" : line.slice(0, at).trim();
+      if (at < 0 || !from) return { error: `Line ${i + 1} needs the form: what you say => what to paste` };
+      rules.push({ from, to: line.slice(at + 2).trim() });
+    }
+    return { rules };
+  }
+  $("setReplacements").addEventListener("input", () => {
+    clearTimeout(replacementsSaveTimer);
+    replacementsSaveTimer = setTimeout(() => {
+      replacementsSaveTimer = null;
+      const parsed = parseReplacements($("setReplacements").value);
+      $("replacementsNote").textContent = parsed.error || "";
+      if (!parsed.error) saveSetting("replacements", parsed.rules);
+    }, 600);
+  });
   $("setUnload").addEventListener("change", e => saveSetting("unload_after_minutes", Number(e.target.value), "performance"));
   $("setPreload").addEventListener("change", e => saveSetting("preload_dictation_model", e.target.checked, "performance"));
   // The server wants a number of seconds, not the select's string.

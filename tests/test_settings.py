@@ -275,6 +275,23 @@ class SettingsTests(unittest.TestCase):
             self.client.put("/api/settings", json={"dictation": {"model": "0.6b"}})
             warm_up.assert_called_once_with("0.6b")
 
+    def test_replacements_and_commands_round_trip(self):
+        rules = [{"from": "my email", "to": "sam@example.com"}]
+        body = self.client.put(
+            "/api/settings", json={"dictation": {"replacements": rules, "spoken_commands": False}}
+        ).json()
+        self.assertEqual(body["dictation"]["replacements"], rules)
+        self.assertFalse(body["dictation"]["spoken_commands"])
+        self.assertEqual(settings._load_settings()["dictation"]["replacements"], rules)
+        for payload in (
+            {"dictation": {"replacements": [{"from": "", "to": "x"}]}},
+            {"dictation": {"replacements": [{"say": "a", "paste": "b"}]}},
+            {"dictation": {"replacements": "a => b"}},
+            {"dictation": {"spoken_commands": "yes"}},
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.client.put("/api/settings", json=payload).status_code, 400)
+
     def test_dictation_status_reports_the_configured_hotkey(self):
         self.client.put("/api/settings", json={"dictation": {"hotkey": "right_option"}})
         status = self.client.get("/api/dictation/status").json()

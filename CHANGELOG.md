@@ -31,6 +31,14 @@ details when clearly documented.
   of the day is not the slow one; a changed dictation model is loaded as
   soon as it is chosen. Off by unticking **Load the dictation model at
   launch** behind Set up
+- Spoken layout commands for English dictation: "new line" and "new
+  paragraph", said on their own between sentences, become line and
+  paragraph breaks. Inside a sentence they stay words, so "a new line of
+  products" is left alone. Off with one tick behind Set up
+- Replacements for dictation: "what you say => what to paste", one per line
+  behind Set up, matched as whole words regardless of case, longest phrase
+  first. Dictated text also has its whitespace tidied before it is pasted.
+  None of this ever touches a file's transcript
 - The Fn (Globe) key as a push-to-talk key. macOS synthesizes Fn around every
   arrow and navigation key, which is why it was never offered; the helper now
   watches the physical key through the keyboard's own reports instead, under

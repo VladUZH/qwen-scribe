@@ -503,6 +503,19 @@ class DictationHistoryTests(WorkerTestCase):
                 jobs._prune_jobs_locked()
         self.assertNotIn(job["id"], jobs.jobs)
 
+    def test_a_dictation_is_tidied_and_an_upload_is_not(self):
+        settings._settings["dictation"]["replacements"] = [{"from": "my email", "to": "sam@example.com"}]
+
+        class ChattySession:
+            def transcribe(self, audio, **kwargs):
+                return FakeResult(text="Send it to my email. New line. Thanks.", language="English")
+
+        dictated = self.run_worker(ChattySession(), source="dictation")
+        uploaded = self.run_worker(ChattySession(), source="upload")
+
+        self.assertEqual(dictated["result"]["text"], "Send it to sam@example.com.\nThanks.")
+        self.assertEqual(uploaded["result"]["text"], "Send it to my email. New line. Thanks.")
+
     def test_the_history_choice_never_touches_an_upload(self):
         settings._settings["dictation"]["save_history"] = False
 

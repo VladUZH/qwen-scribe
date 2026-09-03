@@ -15,7 +15,7 @@ from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
-from . import config, history, sessions, settings
+from . import cleanup, config, history, sessions, settings
 
 # Where a job came from. The page uploads files; the native helper sends its
 # recordings as dictation, which is what lets the history opt-out apply to
@@ -341,8 +341,13 @@ def _run_job(job_id: str) -> None:
         # is the same between processes.
         language = Counter(languages).most_common(1)[0][0] if languages else None
         finished_at = time.time()
+        text = _join_transcript_texts(texts, language)
+        if job.get("source") == "dictation":
+            # Spoken commands, the user's replacements, and tidy whitespace:
+            # for text about to be pasted, and never for a file's transcript.
+            text = cleanup.dictation_text(text, language, settings.current("dictation"))
         result = {
-            "text": _join_transcript_texts(texts, language),
+            "text": text,
             "language": language,
             # word-level [{text,start,end}]
             "segments": None if timestamps_unavailable else (segments or None),
