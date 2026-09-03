@@ -54,10 +54,12 @@ terms unless explicitly stated otherwise.
   store, worker, cancel/retry/shutdown), `history` (transcripts, search,
   export), `dictation` (helper heartbeat), `api` (routes and middleware)
 - `static/index.html`: dependency-free browser interface
+- `static/transcript.js`: the sentence splitter and SRT builder the page
+  loads, tested under Node in `tests/js/`
 - `native/DictationHelper.m`: global shortcut, recording, HUD, and paste bridge
 - `macos/`: tracked app launchers and property-list sources
 - `scripts/`: environment, checks, app build, and release packaging
-- `tests/`: model-free API and storage tests
+- `tests/`: model-free API and storage tests, plus the Node tests in `tests/js/`
 
 Prefer standard-library code for repository tooling. Keep the browser interface
 free of remote assets and build-time JavaScript dependencies unless there is a

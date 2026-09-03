@@ -37,6 +37,8 @@ jobs:
           QWEN_SCRIBE_DATA_DIR: ${{ runner.temp }}/qwen-scribe-test-data
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/qwen-scribe-pycache
         run: python -m unittest discover -s tests -v
+      - name: Run interface tests
+        run: node --test tests/js/transcript.test.mjs
       - name: Check publishable source
         run: python scripts/check_repo.py
       - name: Compile Python sources
