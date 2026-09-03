@@ -31,6 +31,11 @@ details when clearly documented.
   of the day is not the slow one; a changed dictation model is loaded as
   soon as it is chosen. Off by unticking **Load the dictation model at
   launch** behind Set up
+- The Fn (Globe) key as a push-to-talk key. macOS synthesizes Fn around every
+  arrow and navigation key, which is why it was never offered; the helper now
+  watches the physical key through the keyboard's own reports instead, under
+  the Input Monitoring grant it already has, and the menu bar offers Fn only
+  while a keyboard with one is attached
 
 ### Changed
 

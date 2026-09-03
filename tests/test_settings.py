@@ -281,6 +281,15 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(status["hotkey"], "right_option")
         self.assertEqual(status["shortcut"], "Right ⌥")
 
+    def test_the_fn_key_is_offered_and_accepted(self):
+        """The helper's table and this one must agree; see DictationHelper.m."""
+        body = self.client.get("/api/settings").json()
+        self.assertIn({"id": "fn", "label": "Fn"}, body["options"]["hotkeys"])
+        self.assertEqual(
+            self.client.put("/api/settings", json={"dictation": {"hotkey": "fn"}}).status_code, 200
+        )
+        self.assertEqual(self.client.get("/api/dictation/status").json()["shortcut"], "Fn")
+
 
 if __name__ == "__main__":
     unittest.main()

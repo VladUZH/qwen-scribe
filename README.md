@@ -46,8 +46,9 @@ transcript text stay on the Mac.
 - Automatic local transcript history with search, reopen, export-all,
   individual delete, and delete-all controls
 - Hold the configured **push-to-talk key** (right Command by default; right
-  Option or right Control if you prefer) in any text field, speak, then
-  release to transcribe locally and paste at the cursor. Or switch to
+  Option, right Control, or the Fn/Globe key if you prefer) in any text
+  field, speak, then release to transcribe locally and paste at the cursor.
+  Or switch to
   press-to-start, press-to-stop for longer dictation, with the HUD counting
   the seconds
 - Menu-bar status item with the dictation state, a push-to-talk key picker,
@@ -143,7 +144,7 @@ Desktop dictation starts with the Mac app. On first launch, allow Qwen Scribe in
 **System Settings → Privacy & Security** for:
 
 - **Microphone** — records while the push-to-talk key is held
-- **Input Monitoring** — detects that modifier while another app is active
+- **Input Monitoring** — detects that key while another app is active
 - **Accessibility** — pastes the finished text into the focused field
 
 After changing Input Monitoring or Accessibility, stop and reopen Qwen Scribe.
@@ -152,7 +153,9 @@ granted.
 
 The helper watches modifier-change events and reacts only to the configured
 push-to-talk key (right Command unless you change it in the web interface or
-the menu bar). It snapshots the pasteboard in memory, pastes the transcription, and
+the menu bar). The Fn key is watched as a physical key through the keyboard's
+own reports, because macOS synthesizes Fn around every arrow and navigation
+key; the menu bar offers it only while a keyboard with an Fn key is attached. It snapshots the pasteboard in memory, pastes the transcription, and
 restores the previous pasteboard if it has not changed. Without Accessibility
 access it cannot insert text at all, so it leaves the transcript on the
 clipboard and reports the failure instead of claiming success. See

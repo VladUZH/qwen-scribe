@@ -60,8 +60,10 @@ Desktop dictation is optional and requests:
   tap that stops it. Either way a recording is stopped on its own at the
   configured limit: two minutes by default, ten at most.
 - **Input Monitoring:** the native helper subscribes to modifier-change events
-  and reacts only to the configured right-side modifier key: Command, Option,
-  or Control. It does not implement a text key logger.
+  and reacts only to the configured push-to-talk key: right Command, right
+  Option, or right Control. For the Fn key it additionally reads that one
+  key's up and down state from the keyboard's own reports, and nothing else
+  from them. It does not implement a text key logger.
 - **Accessibility:** sends Command-V to the application that was focused when
   dictation began.
 

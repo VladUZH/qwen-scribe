@@ -65,14 +65,17 @@ UNSPACED_LANGUAGE_ALIASES = {
 }
 
 # Push-to-talk keys the native helper can watch. The ids must match the
-# key-code/modifier-mask table in native/DictationHelper.m. Only right-side
-# modifiers qualify: they have unambiguous device-dependent bits and macOS
-# never synthesizes them around other keys (Fn is synthesized around every
-# arrow/navigation key, so offering it would start dictation on PageUp).
+# key-code/modifier-mask table in native/DictationHelper.m. The right-side
+# modifiers have unambiguous device-dependent bits and macOS never
+# synthesizes them around other keys. Fn is different: macOS synthesizes it
+# around every arrow and navigation key, so the helper watches the physical
+# key through the keyboard's HID reports instead, and only offers it in the
+# menu bar when an attached keyboard has one.
 DICTATION_HOTKEYS = {
     "right_command": "Right ⌘",
     "right_option": "Right ⌥",
     "right_control": "Right ⌃",
+    "fn": "Fn",
 }
 
 # How the push-to-talk key is used. Hold records while the key is down.

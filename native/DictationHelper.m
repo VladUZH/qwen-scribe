@@ -2,6 +2,9 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <IOKit/hid/IOHIDKeys.h>
+#import <IOKit/hid/IOHIDLib.h>
+#import <IOKit/hid/IOHIDUsageTables.h>
 #import <math.h>
 
 static NSString *const QSServerBase = @"http://127.0.0.1:8990";
@@ -14,10 +17,12 @@ static const CGKeyCode QSPasteKeyCode = 9;
 // <IOKit/hidsystem/IOLLEvent.h> (NX_DEVICER*KEYMASK): the device-independent
 // flags (e.g. NSEventModifierFlagCommand) stay set while the OTHER key of the
 // pair is held, which would swallow the key-up and leave the microphone
-// recording. Fn is deliberately NOT offered: macOS synthesizes fn-flagged
-// keyCode-63 flagsChanged events around every arrow/navigation key, so a
-// naive Fn hotkey would start dictation on PageUp. Supporting it needs an
-// IOHIDManager listener for the physical key (roadmapped).
+// recording.
+//
+// Fn is different. macOS synthesizes fn-flagged keyCode-63 flagsChanged
+// events around every arrow and navigation key, so the flag alone would start
+// dictation on PageUp. The physical key is watched instead, through the
+// keyboard's own HID reports (see installFnListener); its mask here is unused.
 typedef struct {
     const char *identifier;
     CGKeyCode keyCode;       // kVK_* virtual key code
@@ -25,11 +30,21 @@ typedef struct {
     const char *label;
 } QSHotkeySpec;
 
+static const CGKeyCode QSFnVirtualKey = 63;   // kVK_Function
+
 static const QSHotkeySpec QSHotkeyTable[] = {
     {"right_command", 54, 0x00000010, "Right \xE2\x8C\x98"},   // NX_DEVICERCMDKEYMASK
     {"right_option",  61, 0x00000040, "Right \xE2\x8C\xA5"},   // NX_DEVICERALTKEYMASK
     {"right_control", 62, 0x00002000, "Right \xE2\x8C\x83"},   // NX_DEVICERCTLKEYMASK
+    {"fn",            QSFnVirtualKey, 0, "Fn"},
 };
+
+// Apple keyboards report the physical Fn (Globe) key on the vendor top-case
+// usage page: kHIDPage_AppleVendorTopCase and kHIDUsage_AV_TopCase_KeyboardFn
+// in AppleHIDUsageTables.h, spelled out here so the build needs no extra
+// header.
+static const uint32_t QSAppleVendorTopCasePage = 0xFF;
+static const uint32_t QSTopCaseKeyboardFnUsage = 0x03;
 
 static const QSHotkeySpec *QSHotkeyForIdentifier(NSString *identifier) {
     for (size_t i = 0; i < sizeof(QSHotkeyTable) / sizeof(QSHotkeyTable[0]); i++) {
@@ -300,7 +315,47 @@ static const CGFloat QSHUDHeight = 50;
 // The HUD state last shown from a job poll, so a poll every half second
 // does not restart the animation every half second.
 @property (nonatomic) NSInteger polledState;
+// The physical-Fn-key listener, and the keyboards seen that have an Fn key.
+@property (nonatomic, assign) IOHIDManagerRef hidManager;
+@property (nonatomic) BOOL hidOpened;
+@property (nonatomic, strong) NSMutableSet<NSValue *> *fnKeyboards;
+- (void)handleFnKey:(BOOL)isDown;
+- (void)keyboardAttached:(IOHIDDeviceRef)device;
+- (void)keyboardDetached:(IOHIDDeviceRef)device;
 @end
+
+static BOOL QSDeviceHasFnKey(IOHIDDeviceRef device) {
+    NSDictionary *fnElement = @{
+        @kIOHIDElementUsagePageKey: @(QSAppleVendorTopCasePage),
+        @kIOHIDElementUsageKey: @(QSTopCaseKeyboardFnUsage),
+    };
+    CFArrayRef elements = IOHIDDeviceCopyMatchingElements(device, (__bridge CFDictionaryRef)fnElement,
+                                                          kIOHIDOptionsTypeNone);
+    BOOL found = elements != NULL && CFArrayGetCount(elements) > 0;
+    if (elements) CFRelease(elements);
+    return found;
+}
+
+static void QSHIDDeviceMatched(void *context, IOReturn result, void *sender, IOHIDDeviceRef device) {
+    if (result != kIOReturnSuccess) return;
+    [(__bridge QSDictationDelegate *)context keyboardAttached:device];
+}
+
+static void QSHIDDeviceRemoved(void *context, IOReturn result, void *sender, IOHIDDeviceRef device) {
+    [(__bridge QSDictationDelegate *)context keyboardDetached:device];
+}
+
+static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHIDValueRef value) {
+    if (result != kIOReturnSuccess) return;
+    IOHIDElementRef element = IOHIDValueGetElement(value);
+    if (IOHIDElementGetUsagePage(element) != QSAppleVendorTopCasePage
+        || IOHIDElementGetUsage(element) != QSTopCaseKeyboardFnUsage) {
+        return;
+    }
+    BOOL isDown = IOHIDValueGetIntegerValue(value) != 0;
+    QSDictationDelegate *delegate = (__bridge QSDictationDelegate *)context;
+    dispatch_async(dispatch_get_main_queue(), ^{ [delegate handleFnKey:isDown]; });
+}
 
 @implementation QSDictationDelegate
 
@@ -393,6 +448,8 @@ static const CGFloat QSHUDHeight = 50;
         [weakSelf handleFlagsChanged:event];
         return event;
     }];
+    self.fnKeyboards = [NSMutableSet set];
+    [self installFnListener];
 
     [self sendHeartbeat];
     self.heartbeatTimer = [NSTimer scheduledTimerWithTimeInterval:10
@@ -422,6 +479,13 @@ static const CGFloat QSHUDHeight = 50;
     [self.heartbeatTimer invalidate];
     [self.recordingWatchdog invalidate];
     [self.elapsedTimer invalidate];
+    if (self.hidManager) {
+        IOHIDManagerUnscheduleFromRunLoop(self.hidManager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
+        if (self.hidOpened) IOHIDManagerClose(self.hidManager, kIOHIDOptionsTypeNone);
+        CFRelease(self.hidManager);
+        self.hidManager = NULL;
+        self.hidOpened = NO;
+    }
     if (self.recordingURL) {
         [[NSFileManager defaultManager] removeItemAtURL:self.recordingURL error:nil];
         self.recordingURL = nil;
@@ -465,9 +529,72 @@ static const CGFloat QSHUDHeight = 50;
     }
 }
 
+// ── The Fn key, watched as a physical key ─────────────────────────────────
+
+- (void)installFnListener {
+    // Every keyboard is matched, so a keyboard that gains or loses an Fn key
+    // is noticed; only the Fn element's values are delivered.
+    self.hidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+    if (!self.hidManager) return;
+    NSDictionary *keyboards = @{
+        @kIOHIDDeviceUsagePageKey: @(kHIDPage_GenericDesktop),
+        @kIOHIDDeviceUsageKey: @(kHIDUsage_GD_Keyboard),
+    };
+    NSDictionary *fnOnly = @{
+        @kIOHIDElementUsagePageKey: @(QSAppleVendorTopCasePage),
+        @kIOHIDElementUsageKey: @(QSTopCaseKeyboardFnUsage),
+    };
+    IOHIDManagerSetDeviceMatching(self.hidManager, (__bridge CFDictionaryRef)keyboards);
+    IOHIDManagerSetInputValueMatching(self.hidManager, (__bridge CFDictionaryRef)fnOnly);
+    IOHIDManagerRegisterDeviceMatchingCallback(self.hidManager, QSHIDDeviceMatched, (__bridge void *)self);
+    IOHIDManagerRegisterDeviceRemovalCallback(self.hidManager, QSHIDDeviceRemoved, (__bridge void *)self);
+    IOHIDManagerRegisterInputValueCallback(self.hidManager, QSHIDValueChanged, (__bridge void *)self);
+    IOHIDManagerScheduleWithRunLoop(self.hidManager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
+    [self openFnListener];
+}
+
+/// Opening needs Input Monitoring, the same grant the modifier keys need.
+/// Retried from the heartbeat until it succeeds, so granting the permission
+/// after launch is enough.
+- (void)openFnListener {
+    if (!self.hidManager || self.hidOpened) return;
+    IOReturn opened = IOHIDManagerOpen(self.hidManager, kIOHIDOptionsTypeNone);
+    if (opened == kIOReturnSuccess) {
+        self.hidOpened = YES;
+    } else if (opened != kIOReturnNotPermitted) {
+        fprintf(stderr, "Qwen Scribe dictation: the Fn key listener could not start (0x%x)\n", opened);
+    }
+}
+
+- (void)keyboardAttached:(IOHIDDeviceRef)device {
+    if (QSDeviceHasFnKey(device)) [self.fnKeyboards addObject:[NSValue valueWithPointer:device]];
+}
+
+- (void)keyboardDetached:(IOHIDDeviceRef)device {
+    [self.fnKeyboards removeObject:[NSValue valueWithPointer:device]];
+}
+
+- (BOOL)fnKeyAvailable {
+    return self.fnKeyboards.count > 0;
+}
+
+- (void)handleFnKey:(BOOL)isDown {
+    if (self.hotkey->keyCode != QSFnVirtualKey) return;
+    [self hotkeyTransition:isDown];
+}
+
+// ── The modifier keys, watched through flagsChanged ───────────────────────
+
 - (void)handleFlagsChanged:(NSEvent *)event {
     if (event.keyCode != self.hotkey->keyCode) return;
+    // Fn arrives through the HID listener; the flagsChanged events for it
+    // are the synthesized ones this path exists to ignore.
+    if (self.hotkey->keyCode == QSFnVirtualKey) return;
     BOOL isDown = (event.modifierFlags & self.hotkey->mask) != 0;
+    [self hotkeyTransition:isDown];
+}
+
+- (void)hotkeyTransition:(BOOL)isDown {
     if (isDown == self.hotkeyIsDown) return;
     self.hotkeyIsDown = isDown;
     if (![self.dictationMode isEqualToString:@"toggle"]) {
@@ -899,6 +1026,8 @@ static const CGFloat QSHUDHeight = 50;
     request.HTTPMethod = @"POST";
     [[NSURLSession.sharedSession dataTaskWithRequest:request] resume];
     [self fetchSettings];
+    // Input Monitoring may have been granted since launch.
+    if (inputMonitoring) [self openFnListener];
 }
 
 // ── Settings (owned by the server; the helper is a follower) ──────────────
@@ -1026,12 +1155,17 @@ static const CGFloat QSHUDHeight = 50;
     hotkeyMenu.autoenablesItems = NO;
     for (size_t i = 0; i < sizeof(QSHotkeyTable) / sizeof(QSHotkeyTable[0]); i++) {
         const QSHotkeySpec *spec = &QSHotkeyTable[i];
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@(spec->label)
+        BOOL isFn = spec->keyCode == QSFnVirtualKey;
+        NSString *title = @(spec->label);
+        if (isFn && ![self fnKeyAvailable]) {
+            title = @"Fn (no keyboard with an Fn key attached)";
+        }
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
                                                       action:@selector(selectHotkey:) keyEquivalent:@""];
         item.target = self;
         item.representedObject = @(spec->identifier);
         item.state = (spec == self.hotkey) ? NSControlStateValueOn : NSControlStateValueOff;
-        item.enabled = self.serverReachable;
+        item.enabled = self.serverReachable && (!isFn || [self fnKeyAvailable]);
         [hotkeyMenu addItem:item];
     }
     hotkeyRoot.submenu = hotkeyMenu;
