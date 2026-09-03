@@ -3,7 +3,9 @@ updates:
   - package-ecosystem: pip
     directory: "/"
     schedule:
-      interval: weekly
+      # Weekly produced more bot pull requests than releases; two of the last
+      # three were closed unmerged. A reviewed monthly bump is enough.
+      interval: monthly
     groups:
       python-runtime:
         patterns: ["*"]
@@ -11,6 +13,9 @@ updates:
       # pydantic pins pydantic-core to an exact version, so the core can only
       # move when pydantic itself moves. Bumping it on its own resolves to a
       # lock no pydantic release accepts, and the macOS build fails outright.
+      # The mirror image also holds: a pydantic bump needs the core bumped by
+      # hand in the same pull request (see #18), until the lock is generated
+      # by a resolver that moves the pair together.
       - dependency-name: "pydantic-core"
   - package-ecosystem: github-actions
     directory: "/"
