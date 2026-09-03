@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import uvicorn
 
-from qwen_scribe import config
+from qwen_scribe import config, jobs
 from qwen_scribe.api import app  # noqa: F401  (re-exported for `uvicorn server:app`)
 
 
 def main() -> None:
+    # Loading the dictation model at start and releasing idle models are for
+    # the real server only; the test suite never wants a model it did not ask
+    # for, which is why the package leaves this off.
+    jobs.background_loading = True
     print(f"\n  Qwen Scribe — open http://{config.HOST}:{config.PORT} in your browser\n")
     uvicorn.run(app, host=config.HOST, port=config.PORT, log_level="warning")
 

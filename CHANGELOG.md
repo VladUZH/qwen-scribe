@@ -23,6 +23,21 @@ details when clearly documented.
   remind you it is on
 - The longest one dictation may run is now a setting, from one minute to ten,
   two by default; it was a fixed two minutes
+- The first-run model download reports its progress on the job, "1.2 of
+  3.4 GB", instead of sitting on "Loading model" for the minutes it takes,
+  and the dictation HUD shows "Loading model…" with the same figure rather
+  than "Transcribing…" while it waits
+- The dictation model is loaded when the app starts, so the first dictation
+  of the day is not the slow one; a changed dictation model is loaded as
+  soon as it is chosen. Off by unticking **Load the dictation model at
+  launch** behind Set up
+
+### Changed
+
+- A model unused for 20 minutes is released from memory rather than held
+  until quit. On an 8 GB Mac that had used both models, 4.6 GB stayed
+  claimed all day. The interval is a setting, from ten minutes to four
+  hours or never; the next use reloads the model in a few seconds
 
 ## [0.2.2-beta.1] - 2026-09-04
 

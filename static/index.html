@@ -400,6 +400,20 @@
       <input type="checkbox" id="setSaveHistory">
       <label for="setSaveHistory">Save dictations to history <span class="hint">off keeps each one only until it is pasted</span></label>
     </div>
+    <div class="field">
+      <label for="setUnload">Unload idle models after</label>
+      <select id="setUnload">
+        <option value="0">Never</option>
+        <option value="10">10 minutes</option>
+        <option value="20">20 minutes</option>
+        <option value="60">1 hour</option>
+        <option value="240">4 hours</option>
+      </select>
+    </div>
+    <div class="check">
+      <input type="checkbox" id="setPreload">
+      <label for="setPreload">Load the dictation model at launch</label>
+    </div>
     <div class="settings-note field-wide" id="settingsNote">Changes apply to desktop dictation within about ten seconds.</div>
   </div>
 
@@ -1076,6 +1090,16 @@
     // still inside its debounce.
     if (dictionarySaveTimer === null) $("setDictionary").value = body.dictation.dictionary || "";
     $("setSaveHistory").checked = body.dictation.save_history !== false;
+    const unload = String(body.performance.unload_after_minutes);
+    if (![...$("setUnload").options].some(o => o.value === unload)) {
+      // A value set by hand outside the presets is shown rather than hidden.
+      const o = document.createElement("option");
+      o.value = unload;
+      o.textContent = `${unload} minutes`;
+      $("setUnload").appendChild(o);
+    }
+    $("setUnload").value = unload;
+    $("setPreload").checked = body.performance.preload_dictation_model !== false;
     $("dictationKey").textContent = HOTKEY_LABELS[body.dictation.hotkey] || "Right ⌘";
     // The settings themselves stay folded away; only the way in appears, and
     // only once there is something behind it to show.
@@ -1140,7 +1164,7 @@
   // second's state, and a failed save must not "restore" stale selects.
   let settingsSeq = 0;
 
-  async function saveSetting(key, value) {
+  async function saveSetting(key, value, section = "dictation") {
     const seq = ++settingsSeq;
     settingsNote.classList.remove("error");
     settingsNote.textContent = "Saving…";
@@ -1148,7 +1172,7 @@
       const res = await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dictation: { [key]: value } }),
+        body: JSON.stringify({ [section]: { [key]: value } }),
       });
       if (seq !== settingsSeq) return;
       if (!res.ok) throw new Error();
@@ -1168,6 +1192,8 @@
     $(id).addEventListener("change", e => saveSetting(key, e.target.value)));
   $("setSaveHistory").addEventListener("change", e => saveSetting("save_history", e.target.checked));
   $("setMode").addEventListener("change", e => saveSetting("mode", e.target.value));
+  $("setUnload").addEventListener("change", e => saveSetting("unload_after_minutes", Number(e.target.value), "performance"));
+  $("setPreload").addEventListener("change", e => saveSetting("preload_dictation_model", e.target.checked, "performance"));
   // The server wants a number of seconds, not the select's string.
   $("setMaxSeconds").addEventListener("change", e => saveSetting("max_seconds", Number(e.target.value)));
   let dictionarySaveTimer = null;

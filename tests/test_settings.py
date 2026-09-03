@@ -8,7 +8,7 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
-from qwen_scribe import api, config, settings
+from qwen_scribe import api, config, jobs, settings
 
 BASE_URL = "http://127.0.0.1:8990"
 
@@ -251,6 +251,29 @@ class SettingsTests(unittest.TestCase):
         ):
             with self.subTest(payload=payload):
                 self.assertEqual(self.client.put("/api/settings", json=payload).status_code, 400)
+
+    def test_performance_section_defaults_and_bounds(self):
+        body = self.client.get("/api/settings").json()
+        self.assertEqual(body["performance"], {"unload_after_minutes": 20, "preload_dictation_model": True})
+        body = self.client.put(
+            "/api/settings", json={"performance": {"unload_after_minutes": 0, "preload_dictation_model": False}}
+        ).json()
+        self.assertEqual(body["performance"], {"unload_after_minutes": 0, "preload_dictation_model": False})
+        for payload in (
+            {"performance": {"unload_after_minutes": -1}},
+            {"performance": {"unload_after_minutes": 24 * 60 + 1}},
+            {"performance": {"unload_after_minutes": "20"}},
+            {"performance": {"preload_dictation_model": 1}},
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.client.put("/api/settings", json=payload).status_code, 400)
+
+    def test_changing_the_dictation_model_loads_it_in_the_background(self):
+        with mock.patch.object(jobs, "warm_up") as warm_up:
+            self.client.put("/api/settings", json={"dictation": {"language": "German"}})
+            warm_up.assert_not_called()
+            self.client.put("/api/settings", json={"dictation": {"model": "0.6b"}})
+            warm_up.assert_called_once_with("0.6b")
 
     def test_dictation_status_reports_the_configured_hotkey(self):
         self.client.put("/api/settings", json={"dictation": {"hotkey": "right_option"}})

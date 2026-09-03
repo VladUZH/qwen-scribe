@@ -21,7 +21,12 @@ WORKER_STOPPING = "The transcription worker is stopping"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     jobs.stopping.clear()
+    jobs.start_maintenance()
+    # The first dictation of the day should not be the one that loads the
+    # model. Only in the real server; see jobs.background_loading.
+    jobs.warm_up(settings.current("dictation")["model"])
     yield
+    jobs.stop_maintenance()
     jobs.shutdown()
 
 
@@ -104,12 +109,18 @@ def get_settings() -> dict:
 
 @app.put("/api/settings")
 def update_settings(payload: dict) -> dict:
+    before = settings.current("dictation")["model"]
     try:
-        return settings.update(payload)
+        body = settings.update(payload)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except OSError as exc:
         raise HTTPException(500, f"Could not save settings: {exc}") from exc
+    # A changed dictation model is loaded now rather than on the next
+    # dictation, for the same reason as the load at start.
+    if body["dictation"]["model"] != before:
+        jobs.warm_up(body["dictation"]["model"])
+    return body
 
 
 @app.post("/api/jobs")

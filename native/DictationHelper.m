@@ -57,9 +57,14 @@ static void QSAppendString(NSMutableData *data, NSString *string) {
 typedef NS_ENUM(NSInteger, QSHUDState) {
     QSHUDStateListening,
     QSHUDStateTranscribing,
+    QSHUDStateLoading,       // the server is loading (or first downloading) the model
     QSHUDStateInserted,
     QSHUDStateError,
 };
+
+// Wide enough for "Loading model…" followed by "1.2 of 3.4 GB".
+static const CGFloat QSHUDWidth = 244;
+static const CGFloat QSHUDHeight = 50;
 
 @interface QSHUDView : NSView
 @property (nonatomic) QSHUDState state;
@@ -81,7 +86,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     self.detail = nil;
     [self.animationTimer invalidate];
     self.animationTimer = nil;
-    if (state == QSHUDStateListening || state == QSHUDStateTranscribing) {
+    if (state == QSHUDStateListening || state == QSHUDStateTranscribing || state == QSHUDStateLoading) {
         __weak typeof(self) weakSelf = self;
         self.animationTimer = [NSTimer scheduledTimerWithTimeInterval:0.075 repeats:YES block:^(NSTimer *timer) {
             weakSelf.phase += 0.34;
@@ -116,6 +121,10 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
             accent = [NSColor colorWithRed:0.98 green:0.63 blue:0.25 alpha:1];
             label = @"Transcribing…";
             break;
+        case QSHUDStateLoading:
+            accent = [NSColor colorWithRed:0.62 green:0.47 blue:0.93 alpha:1];
+            label = @"Loading model…";
+            break;
         case QSHUDStateInserted:
             accent = [NSColor colorWithRed:0.44 green:0.82 blue:0.59 alpha:1];
             label = @"Text inserted";
@@ -128,7 +137,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 
     CGFloat centerY = NSMidY(self.bounds);
     CGFloat textX = 44;
-    if (self.state == QSHUDStateListening || self.state == QSHUDStateTranscribing) {
+    if (self.state == QSHUDStateListening || self.state == QSHUDStateTranscribing || self.state == QSHUDStateLoading) {
         CGFloat pulse = 0.5 + 0.5 * sin(self.phase);
         [[accent colorWithAlphaComponent:0.15 + pulse * 0.12] setFill];
         [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(14 - pulse * 2, centerY - 7 - pulse * 2,
@@ -192,7 +201,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 - (instancetype)init {
     self = [super init];
     if (self) {
-        NSRect frame = NSMakeRect(0, 0, 196, 50);
+        NSRect frame = NSMakeRect(0, 0, QSHUDWidth, QSHUDHeight);
         self.panel = [[NSPanel alloc] initWithContentRect:frame
                                                 styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
                                                   backing:NSBackingStoreBuffered
@@ -288,6 +297,9 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 @property (atomic) BOOL shuttingDown;
 @property (nonatomic) BOOL hotkeyIsDown;
 @property (nonatomic) BOOL busy;
+// The HUD state last shown from a job poll, so a poll every half second
+// does not restart the animation every half second.
+@property (nonatomic) NSInteger polledState;
 @end
 
 @implementation QSDictationDelegate
@@ -578,6 +590,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
         return;
     }
     [self.hud showState:QSHUDStateTranscribing];
+    self.polledState = QSHUDStateTranscribing;
     [self uploadRecording:self.recordingURL];
 }
 
@@ -672,12 +685,37 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
         } else if ([status isEqualToString:@"error"]) {
             [weakSelf reportFailure:state[@"detail"] ?: @"Transcription failed"];
         } else {
+            // Loading the model, or downloading it the first time, is the one
+            // wait long enough to deserve its own words.
+            QSHUDState shown = [status isEqualToString:@"loading"] ? QSHUDStateLoading : QSHUDStateTranscribing;
+            NSString *detail = [state[@"detail"] isKindOfClass:NSString.class] ? state[@"detail"] : nil;
+            dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf showPolledState:shown detail:detail]; });
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
                            dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
                 [weakSelf pollJob:jobID attempt:attempt + 1];
             });
         }
     }] resume];
+}
+
+- (void)showPolledState:(QSHUDState)state detail:(NSString *)detail {
+    if (self.shuttingDown || !self.busy) return;
+    if (self.polledState != state) {
+        [self.hud showState:state];
+        self.polledState = state;
+    }
+    // "Downloading model · 1.2 of 3.4 GB" carries the only figure worth
+    // showing beside the label.
+    NSString *figure = nil;
+    NSRange separator = [detail rangeOfString:@"· "];
+    if (state == QSHUDStateLoading && separator.location != NSNotFound) {
+        figure = [detail substringFromIndex:NSMaxRange(separator)];
+    }
+    BOOL changed = (figure || self.hud.view.detail) && ![figure isEqualToString:self.hud.view.detail];
+    if (changed) {
+        self.hud.view.detail = figure;
+        self.hud.view.needsDisplay = YES;
+    }
 }
 
 /// Leave the transcript on the clipboard and tell the user why it was not typed.
@@ -1169,11 +1207,13 @@ int main(int argc, const char *argv[]) {
         if (argc > 2 && strcmp(argv[1], "--render-hud") == 0) {
             NSApplication *application = NSApplication.sharedApplication;
             [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
-            NSRect frame = NSMakeRect(0, 0, 196, 50);
+            NSRect frame = NSMakeRect(0, 0, QSHUDWidth, QSHUDHeight);
             QSHUDView *view = [[QSHUDView alloc] initWithFrame:frame];
             QSHUDState state = QSHUDStateListening;
             if (argc > 3 && strcmp(argv[3], "transcribing") == 0) {
                 state = QSHUDStateTranscribing;
+            } else if (argc > 3 && strcmp(argv[3], "loading") == 0) {
+                state = QSHUDStateLoading;
             } else if (argc > 3 && strcmp(argv[3], "inserted") == 0) {
                 state = QSHUDStateInserted;
             } else if (argc > 3 && strcmp(argv[3], "error") == 0) {
@@ -1184,8 +1224,8 @@ int main(int argc, const char *argv[]) {
             view.phase = 1.15;
             NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc]
                 initWithBitmapDataPlanes:NULL
-                pixelsWide:392
-                pixelsHigh:100
+                pixelsWide:(NSInteger)(QSHUDWidth * 2)
+                pixelsHigh:(NSInteger)(QSHUDHeight * 2)
                 bitsPerSample:8
                 samplesPerPixel:4
                 hasAlpha:YES

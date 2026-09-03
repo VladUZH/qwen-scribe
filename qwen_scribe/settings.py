@@ -43,6 +43,15 @@ DEFAULT_SETTINGS = {
         "context": "",
         "sentence_per_line": False,
     },
+    # How models occupy memory between uses.
+    "performance": {
+        # Minutes without a job before a loaded model is released; 0 keeps
+        # every model loaded until quit.
+        "unload_after_minutes": 20,
+        # Load the dictation model when the app starts, so the first
+        # dictation of the day is not the slow one.
+        "preload_dictation_model": True,
+    },
 }
 
 
@@ -86,6 +95,10 @@ _SECTION_VALIDATORS = {
         "turbo": _boolean,
         "context": _short_text,
         "sentence_per_line": _boolean,
+    },
+    "performance": {
+        "unload_after_minutes": _seconds_between(0, 24 * 60),
+        "preload_dictation_model": _boolean,
     },
 }
 

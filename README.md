@@ -76,7 +76,10 @@ transcript text stay on the Mac.
 
 The 1.7B model needs roughly 3.4 GB of unified memory and the 0.6B model roughly
 1.2 GB, in addition to normal application overhead. Model weights are not
-included in this repository.
+included in this repository; the first use downloads them, with the progress
+shown on the job. A loaded model is released after 20 minutes without a job,
+and the dictation model is loaded when the app starts so the first dictation is
+quick. Both are settings behind **Set up** on the dictation card.
 
 Word timestamps for Japanese and Korean use the `nagisa` and `soynlp`
 tokenizers from the upstream `aligner` extra. The runtime lock has included

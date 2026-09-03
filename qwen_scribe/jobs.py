@@ -26,6 +26,13 @@ SOURCES = {"upload", "dictation"}
 # the helper to collect the text, then forgotten along with the text.
 EPHEMERAL_RETENTION_SECONDS = 60
 
+# Loading a model in the background (at start, and when the dictation model
+# changes) and releasing idle ones only happen in the real server. The entry
+# point switches this on; the test suite never does, so no test loads a
+# model it did not ask for.
+background_loading = False
+MAINTENANCE_INTERVAL_SECONDS = 60
+
 
 class JobNotFound(LookupError):
     pass
@@ -193,11 +200,25 @@ def _run_job(job_id: str) -> None:
             raise _JobCancelled
         if stopping.is_set():
             raise RuntimeError("Server stopped before this job started")
-        _update(job_id, status="loading", detail="Loading model (first run downloads weights)")
+        _update(job_id, status="loading", detail="Loading model")
         # Loading can download several gigabytes of weights. A cancel that
         # arrived while this job was still queued must not pay for that.
         if cancelled.is_set():
             raise _JobCancelled
+
+        def report_download(done: int, total: int) -> None:
+            _update(
+                job_id,
+                detail=f"Downloading model · {done / 1e9:.1f} of {total / 1e9:.1f} GB",
+                progress=(done / total) if total else 0.0,
+            )
+
+        # The first run fetches the weights; say how far along it is rather
+        # than sitting on "loading" for the minutes a 3.4 GB download takes.
+        sessions.ensure_downloaded(job["model"], progress=report_download)
+        if cancelled.is_set():
+            raise _JobCancelled
+        _update(job_id, detail="Loading model", progress=0.0)
         session = sessions.get_session(job["model"])
 
         # Speculative decoding: the 0.6B model drafts tokens, the 1.7B verifies
@@ -592,6 +613,85 @@ def retry(job_id: str) -> str:
 
     future.add_done_callback(lambda _future: _forget_future(new_id))
     return new_id
+
+
+# ---------------------------------------------------------------------------
+# Background loading and unloading
+# ---------------------------------------------------------------------------
+
+_warming = 0
+_maintenance_stop = threading.Event()
+_maintenance_thread: threading.Thread | None = None
+
+
+def warm_up(model_key: str) -> Future | None:
+    """Load a model on the worker without a visible job.
+
+    Used for the dictation model at start and whenever it changes, so the
+    first dictation is not the one that pays for loading. Queues behind any
+    file already being transcribed, since the worker is the one GPU lane.
+    """
+    if not background_loading:
+        return None
+    if not settings.current("performance").get("preload_dictation_model", True):
+        return None
+    try:
+        return executor.submit(_warm, model_key)
+    except RuntimeError:
+        return None   # the executor is shutting down
+
+
+def _warm(model_key: str) -> None:
+    global _warming
+    _warming += 1
+    try:
+        if stopping.is_set():
+            return
+        sessions.ensure_downloaded(model_key)
+        if stopping.is_set():
+            return
+        sessions.get_session(model_key)
+    except Exception as exc:
+        # Nothing to attach the failure to; the next real job will report it.
+        print(f"Background model load failed: {type(exc).__name__}: {exc}")
+    finally:
+        _warming -= 1
+
+
+def unload_idle_sessions(now: float | None = None) -> list[str]:
+    """Release models unused for the configured time; never during work."""
+    minutes = settings.current("performance").get("unload_after_minutes", 0)
+    if not minutes:
+        return []
+    with jobs_lock:
+        busy = any(job.get("status") in {"loading", "processing"} for job in jobs.values())
+    if busy or _warming:
+        return []
+    return sessions.drop_idle(minutes * 60, now=now)
+
+
+def start_maintenance() -> None:
+    """Start the once-a-minute idle check. Idempotent."""
+    global _maintenance_thread
+    if not background_loading:
+        return
+    if _maintenance_thread is not None and _maintenance_thread.is_alive():
+        return
+    _maintenance_stop.clear()
+
+    def loop() -> None:
+        while not _maintenance_stop.wait(MAINTENANCE_INTERVAL_SECONDS):
+            try:
+                unload_idle_sessions()
+            except Exception as exc:
+                print(f"Idle model check failed: {type(exc).__name__}: {exc}")
+
+    _maintenance_thread = threading.Thread(target=loop, name="qwen-scribe-maintenance", daemon=True)
+    _maintenance_thread.start()
+
+
+def stop_maintenance() -> None:
+    _maintenance_stop.set()
 
 
 def shutdown() -> None:

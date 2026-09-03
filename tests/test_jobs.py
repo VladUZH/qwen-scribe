@@ -65,6 +65,10 @@ class WorkerTestCase(unittest.TestCase):
         upload_directory = mock.patch.object(config, "UPLOAD_DIR", Path(uploads.name))
         upload_directory.start()
         self.addCleanup(upload_directory.stop)
+        # The worker pre-fetches weights before loading; that is the network.
+        prefetch = mock.patch.object(sessions, "ensure_downloaded")
+        prefetch.start()
+        self.addCleanup(prefetch.stop)
 
     def install_audio_stubs(self, chunks: int, seconds_per_chunk: float = 30.0):
         samples = [0.0] * int(SAMPLE_RATE * seconds_per_chunk)
@@ -331,7 +335,9 @@ class JobWorkerTests(unittest.TestCase):
         def session_for(model):
             return target_session if model == "1.7b" else draft_session
 
-        with mock.patch.object(sessions, "get_session", side_effect=session_for), mock.patch.dict(
+        with mock.patch.object(sessions, "ensure_downloaded"), mock.patch.object(
+            sessions, "get_session", side_effect=session_for
+        ), mock.patch.dict(
             "sys.modules",
             {
                 "mlx_qwen3_asr": package,
@@ -508,6 +514,78 @@ class DictationHistoryTests(WorkerTestCase):
 
     def client_job(self, job_id: str) -> dict:
         return TestClient(api.app, base_url=BASE_URL).get(f"/api/jobs/{job_id}").json()
+
+
+class BackgroundLoadingTests(WorkerTestCase):
+    """Warm-up and idle release happen only in the real server, never here."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(setattr, jobs, "background_loading", False)
+        original = dict(settings._settings["performance"])
+        self.addCleanup(lambda: settings._settings["performance"].update(original))
+
+    def test_warm_up_is_off_outside_the_real_server(self):
+        with mock.patch.object(jobs.executor, "submit") as submit:
+            self.assertIsNone(jobs.warm_up("1.7b"))
+        submit.assert_not_called()
+
+    def test_warm_up_loads_on_the_worker_when_enabled(self):
+        jobs.background_loading = True
+        with mock.patch.object(jobs.executor, "submit") as submit:
+            jobs.warm_up("1.7b")
+        submit.assert_called_once_with(jobs._warm, "1.7b")
+
+    def test_warm_up_respects_the_preload_setting(self):
+        jobs.background_loading = True
+        settings._settings["performance"]["preload_dictation_model"] = False
+        with mock.patch.object(jobs.executor, "submit") as submit:
+            self.assertIsNone(jobs.warm_up("1.7b"))
+        submit.assert_not_called()
+
+    def test_idle_release_waits_for_running_work(self):
+        settings._settings["performance"]["unload_after_minutes"] = 20
+        self.stage_job(status="processing")
+        with mock.patch.object(sessions, "drop_idle") as drop_idle:
+            self.assertEqual(jobs.unload_idle_sessions(), [])
+        drop_idle.assert_not_called()
+
+    def test_idle_release_uses_the_configured_minutes(self):
+        settings._settings["performance"]["unload_after_minutes"] = 20
+        with mock.patch.object(sessions, "drop_idle", return_value=["x"]) as drop_idle:
+            self.assertEqual(jobs.unload_idle_sessions(now=1000.0), ["x"])
+        drop_idle.assert_called_once_with(20 * 60, now=1000.0)
+
+    def test_idle_release_is_off_at_zero(self):
+        settings._settings["performance"]["unload_after_minutes"] = 0
+        with mock.patch.object(sessions, "drop_idle") as drop_idle:
+            self.assertEqual(jobs.unload_idle_sessions(), [])
+        drop_idle.assert_not_called()
+
+    def test_the_download_is_reported_in_the_status_line(self):
+        statuses = []
+        real_update = jobs._update
+
+        def record(target, **fields):
+            statuses.append((fields.get("status"), fields.get("detail"), fields.get("progress")))
+            real_update(target, **fields)
+
+        def fake_download(model_key, progress=None):
+            progress(1_200_000_000, 3_400_000_000)
+
+        class GoodSession:
+            def transcribe(self, audio, **kwargs):
+                return FakeResult()
+
+        sessions.ensure_downloaded.side_effect = fake_download
+        with mock.patch.object(jobs, "_update", side_effect=record):
+            job = self.run_worker(GoodSession())
+
+        self.assertEqual(job["status"], "done")
+        downloading = [s for s in statuses if s[1] and s[1].startswith("Downloading")]
+        self.assertEqual(downloading, [(None, "Downloading model · 1.2 of 3.4 GB", 1_200_000_000 / 3_400_000_000)])
+        # Progress returns to zero for the transcription itself.
+        self.assertIn((None, "Loading model", 0.0), statuses)
 
 
 class QueueControlTests(WorkerTestCase):
@@ -1081,7 +1159,7 @@ class JobShutdownTests(unittest.TestCase):
                 config, "TRANSCRIPTS_DIR", transcripts
             ), mock.patch.object(jobs, "executor", temporary_executor), mock.patch.object(
                 sessions, "get_session", return_value=target_session
-            ), mock.patch.dict(
+            ), mock.patch.object(sessions, "ensure_downloaded"), mock.patch.dict(
                 "sys.modules",
                 {
                     "mlx_qwen3_asr": package,
