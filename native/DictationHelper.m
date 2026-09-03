@@ -5,6 +5,7 @@
 #import <IOKit/hid/IOHIDKeys.h>
 #import <IOKit/hid/IOHIDLib.h>
 #import <IOKit/hid/IOHIDUsageTables.h>
+#import <ServiceManagement/ServiceManagement.h>
 #import <math.h>
 
 static NSString *const QSServerBase = @"http://127.0.0.1:8990";
@@ -1191,6 +1192,18 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
     modeRoot.submenu = modeMenu;
     [menu addItem:modeRoot];
 
+    // The login item is macOS's own record, read fresh each time the menu
+    // opens, so the check mark is the truth and not a cached belief.
+    SMAppServiceStatus loginStatus = SMAppService.mainAppService.status;
+    NSString *loginTitle = loginStatus == SMAppServiceStatusRequiresApproval
+        ? @"Launch at Login (approve in System Settings)"
+        : @"Launch at Login";
+    NSMenuItem *login = [[NSMenuItem alloc] initWithTitle:loginTitle
+                                                   action:@selector(toggleLaunchAtLogin:) keyEquivalent:@""];
+    login.target = self;
+    login.state = loginStatus == SMAppServiceStatusEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [menu addItem:login];
+
     [menu addItem:NSMenuItem.separatorItem];
     NSMenuItem *restart = [[NSMenuItem alloc] initWithTitle:@"Restart Server"
                                                      action:@selector(restartServer:) keyEquivalent:@""];
@@ -1219,6 +1232,31 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
     NSString *identifier = sender.representedObject;
     if ([identifier isKindOfClass:NSString.class]) {
         [self pushDictationSetting:@"mode" value:identifier];
+    }
+}
+
+/// Registers or removes the app as a login item through SMAppService, which
+/// keys the item to this bundle's location: the README asks for the app to
+/// live in /Applications so a rebuild does not leave the item pointing at a
+/// bundle that moved.
+- (void)toggleLaunchAtLogin:(id)sender {
+    SMAppService *service = SMAppService.mainAppService;
+    if (service.status == SMAppServiceStatusRequiresApproval) {
+        // macOS wants the user to allow it under Login Items; take them there.
+        [SMAppService openSystemSettingsLoginItems];
+        return;
+    }
+    NSError *error = nil;
+    BOOL changed;
+    if (service.status == SMAppServiceStatusEnabled) {
+        changed = [service unregisterAndReturnError:&error];
+    } else {
+        changed = [service registerAndReturnError:&error];
+    }
+    if (!changed) {
+        fprintf(stderr, "Qwen Scribe: could not change the login item: %s\n",
+                error.localizedDescription.UTF8String ?: "unknown error");
+        [self playSound:@"Basso"];
     }
 }
 

@@ -104,6 +104,12 @@ from `dist/` to `/Applications` after building:
 - `Qwen Scribe.app` starts the server and desktop dictation helper.
 - `Stop Qwen Scribe.app` stops only processes started by Qwen Scribe.
 
+**Launch at Login** in the menu bar registers the app as a login item through
+macOS's own login-item service. The item points at the bundle's location, so
+keep the app in `/Applications`; a rebuild into `dist/` would otherwise leave
+it pointing at a bundle that has moved. macOS may ask you to allow the item
+under **System Settings → General → Login Items** the first time.
+
 An app built locally is ad-hoc signed. If Gatekeeper blocks a downloaded build,
 open it once, then approve it under **System Settings → Privacy & Security →
 Open Anyway** (macOS 15 removed the right-click **Open** bypass). Stable public binaries should be signed

@@ -39,6 +39,9 @@ details when clearly documented.
   behind Set up, matched as whole words regardless of case, longest phrase
   first. Dictated text also has its whitespace tidied before it is pasted.
   None of this ever touches a file's transcript
+- **Launch at Login** in the menu bar, through macOS's own login-item
+  service; the check mark reflects what macOS actually has, and the item
+  takes you to System Settings when macOS wants the login item approved
 - The Fn (Globe) key as a push-to-talk key. macOS synthesizes Fn around every
   arrow and navigation key, which is why it was never offered; the helper now
   watches the physical key through the keyboard's own reports instead, under
