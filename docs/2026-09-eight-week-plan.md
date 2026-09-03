@@ -35,7 +35,7 @@ and diarization, is deferred with reasons in the last section.
 
 A release slips rather than ships broken. The definition of done for every
 release: `make check` green, `make app` verified on a Mac, the changelog
-section dated, README status line and `requirements-lock.txt` header updated,
+section dated, README status line and the three version fields updated,
 the draft's archive installed on a Mac that did not build it, and the manual
 dictation check in `RELEASING.md` step 4 performed on the signed build.
 

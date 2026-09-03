@@ -6,7 +6,9 @@ publishes them. Nothing becomes public from automation alone.
 ## Cutting a release
 
 1. Make sure `main` is green and `CHANGELOG.md` has a dated section for the
-   version.
+   version. The bundle version lives in three places that must agree:
+   `macos/QwenScribe-Info.plist`, the `VERSION` default in
+   `scripts/build_macos_apps.sh`, and `version` in `pyproject.toml`.
 2. Tag and push:
 
    ```bash

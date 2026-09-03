@@ -63,8 +63,8 @@ transcript text stay on the Mac.
 - Apple Silicon Mac
 - macOS 14 or newer, as required by current
   [MLX releases](https://ml-explore.github.io/mlx/build/html/install.html)
-- Native Python 3.12 or newer, as required by the pinned NumPy in
-  [requirements-lock.txt](requirements-lock.txt)
+- Native Python 3.12 or newer, the floor set in [pyproject.toml](pyproject.toml)
+  and required by the pinned NumPy in [requirements-lock.txt](requirements-lock.txt)
 - `ffmpeg` for non-WAV audio and video — Homebrew (`brew install ffmpeg`) or
   MacPorts (`sudo port install ffmpeg`). The Mac app looks on the standard
   Homebrew and MacPorts paths and then on your login shell's `PATH`, so any
@@ -76,10 +76,11 @@ The 1.7B model needs roughly 3.4 GB of unified memory and the 0.6B model roughly
 1.2 GB, in addition to normal application overhead. Model weights are not
 included in this repository.
 
-Word timestamps for Japanese and Korean require the upstream `aligner` extra
-(`nagisa` and `soynlp`), which is not part of the reviewed runtime lock yet.
-Ordinary transcription in those languages is unaffected; leave timestamps off
-until that optional dependency set is deliberately added and reviewed.
+Word timestamps for Japanese and Korean use the `nagisa` and `soynlp`
+tokenizers from the upstream `aligner` extra. The runtime lock has included
+them since v0.2.2, so they install with everything else; if the aligner still
+cannot run on a given file, the transcript is produced and saved without the
+`.srt`, and the interface says why.
 
 ## Build and run the Mac app
 
