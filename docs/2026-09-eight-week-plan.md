@@ -396,7 +396,12 @@ project and fatal to the people who download it.
       handles (mp3, m4a, aac, mp4, mov, m4v, aiff, flac, qta) and falls back
       to ffmpeg only for mkv, webm, ogg, opus, and wma. The "ffmpeg missing"
       messages shrink to those five formats. Tests cover decoder selection
-      by suffix and the error path when neither decoder exists.
+      by suffix and the error path when neither decoder exists. The third
+      CI run showed the cost of a helper no Linux check can compile: the
+      sample-buffer functions are CoreMedia's, the link line named every
+      other framework, and all three macOS jobs died at the same step. A
+      table of the frameworks that provide the functions the source calls
+      now stands in for the compiler that is not there.
 - [x] `ci/bundled-runtime-check`: the Mac checks workflow gains a job that
       starts the built app with every other Python removed from `PATH` and
       Homebrew's directories hidden, proving the launcher creates the
