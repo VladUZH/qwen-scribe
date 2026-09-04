@@ -315,7 +315,7 @@ models first-class instead of a developer script.
 
 **Claude**
 
-- [ ] `feat/model-catalog`: `GET /api/models` lists every model with `id`,
+- [x] `feat/model-catalog`: `GET /api/models` lists every model with `id`,
       `label`, `memory_gb`, `state` in `{"ready","downloadable","needs_conversion","converting"}`.
       Catalog: `0.6b`, `0.6b-4bit`, `1.7b`, `1.7b-8bit`. Quantized variants
       are produced on the device from the upstream fp16 weights (the
@@ -324,13 +324,13 @@ models first-class instead of a developer script.
       reported with their bits and group size. `MODELS` becomes a function
       of the catalog; the `_QUANT_ACTIVE` shim and the `./models` lookup are
       retired with a migration that adopts an existing `models/qwen3-asr-1.7b-8bit`.
-- [ ] `feat/model-conversion-job`: `POST /api/models/{id}/prepare` enqueues
+- [x] `feat/model-conversion-job`: `POST /api/models/{id}/prepare` enqueues
       a conversion in the same single worker with progress, cancel, and the
       same idle-unload rules. The picker offers "1.7B 8-bit (fastest
       accurate)" and "0.6B 4-bit (fastest)" with a one-line quality note
       taken from the upstream benchmark table, and a "Prepare" button when
       conversion is needed. Dictation settings get the same picker.
-- [ ] `docs/model-guide`: a short `docs/models.md` with memory, speed, and
+- [x] `docs/model-guide`: a short `docs/models.md` with memory, speed, and
       quality expectations per variant and the `compare_models.py` recipe
       for validating on the user's own recordings; `compare_models.py`
       learns the catalog paths.
@@ -338,6 +338,9 @@ models first-class instead of a developer script.
       extending its language-name table from 14 towards the 30 languages the
       model supports. When a release lands and the pin moves, the picker
       follows automatically through `test_languages_match_the_installed_model`.
+      Not possible from the autonomous session, whose GitHub access is
+      scoped to this repository; the owner opens it, or a session with
+      access to the upstream repository does.
 
 **Owner**
 

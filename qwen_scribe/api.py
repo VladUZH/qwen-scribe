@@ -11,7 +11,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, Response, Uploa
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, dictation, history, jobs, settings
+from . import config, dictation, history, jobs, models, settings
 
 TRANSCRIPT_NOT_FOUND = "Transcript not found"
 UPLOAD_GONE = "The uploaded file is no longer available — upload it again"
@@ -21,6 +21,10 @@ WORKER_STOPPING = "The transcription worker is stopping"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     jobs.stopping.clear()
+    # A conversion made by quantize_8bit.py next to server.py moves into the
+    # store once, so it is offered rather than made again.
+    models.adopt_legacy()
+    models.sweep_partials()
     jobs.start_maintenance()
     # The first dictation of the day should not be the one that loads the
     # model. Only in the real server; see jobs.background_loading.
@@ -98,8 +102,42 @@ def get_config() -> dict:
         "languages": config.LANGUAGES,
         "extensions": sorted(config.ALLOWED_SUFFIXES),
         "ffmpeg": shutil.which("ffmpeg") is not None,
-        "quantized": config._QUANT_ACTIVE,
     }
+
+
+@app.get("/api/models")
+def list_models() -> dict:
+    return {
+        "models": models.listing(converting=jobs.converting_models()),
+        "default": config.DEFAULT_MODEL,
+    }
+
+
+@app.post("/api/models/{model_id}/prepare")
+def prepare_model(model_id: str) -> JSONResponse:
+    try:
+        return JSONResponse({"id": jobs.prepare(model_id)})
+    except jobs.JobNotFound:
+        raise HTTPException(404, f"Unknown model '{model_id}'") from None
+    except jobs.JobConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(503, WORKER_STOPPING) from exc
+
+
+@app.delete("/api/models/{model_id}", status_code=204)
+def remove_model(model_id: str) -> Response:
+    if model_id not in config.MODEL_CATALOG:
+        raise HTTPException(404, f"Unknown model '{model_id}'")
+    if not models.is_quantized(model_id):
+        raise HTTPException(409, f"{models.label(model_id)} is downloaded by the Hub library; there is nothing to remove here")
+    if jobs.active_model_use(model_id):
+        raise HTTPException(409, f"{models.label(model_id)} is in use by a job that has not finished")
+    try:
+        models.remove(model_id)
+    except OSError as exc:
+        raise HTTPException(500, f"Could not remove {models.label(model_id)}: {exc}") from exc
+    return Response(status_code=204)
 
 
 @app.get("/api/settings")
@@ -117,8 +155,9 @@ def update_settings(payload: dict) -> dict:
     except OSError as exc:
         raise HTTPException(500, f"Could not save settings: {exc}") from exc
     # A changed dictation model is loaded now rather than on the next
-    # dictation, for the same reason as the load at start.
-    if body["dictation"]["model"] != before:
+    # dictation, for the same reason as the load at start. A variant that is
+    # not prepared yet is skipped; the picker says so.
+    if body["dictation"]["model"] != before and models.usable(body["dictation"]["model"]):
         jobs.warm_up(body["dictation"]["model"])
     return body
 
@@ -135,6 +174,10 @@ async def create_job(
 ) -> JSONResponse:
     if model not in config.MODELS:
         raise HTTPException(400, f"Unknown model '{model}'")
+    if not models.usable(model):
+        raise HTTPException(
+            409, f"{models.label(model)} is not prepared yet. Prepare it from the model picker first."
+        )
     if language not in config.LANGUAGES:
         raise HTTPException(400, f"Unsupported language '{language}'")
     if source not in jobs.SOURCES:

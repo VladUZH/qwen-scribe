@@ -15,12 +15,18 @@ from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
-from . import cleanup, config, history, sessions, settings
+from . import cleanup, config, history, models, sessions, settings
 
 # Where a job came from. The page uploads files; the native helper sends its
 # recordings as dictation, which is what lets the history opt-out apply to
 # dictation alone.
 SOURCES = {"upload", "dictation"}
+
+# What a job does. A transcription has an upload behind it; a prepare job
+# converts a catalog model on this Mac and has no file at all. Both go
+# through the one worker, so a conversion queues behind a running
+# transcription instead of competing with it for the GPU and the memory.
+KINDS = {"transcribe", "prepare"}
 
 # A dictation the user chose not to keep is remembered only long enough for
 # the helper to collect the text, then forgotten along with the text.
@@ -191,6 +197,10 @@ def _run_job(job_id: str) -> None:
             return
         job = dict(source)
 
+    if job.get("kind") == "prepare":
+        _run_prepare(job_id, job)
+        return
+
     path = Path(job["path"])
     cancelled = job["cancelled"]
 
@@ -224,7 +234,7 @@ def _run_job(job_id: str) -> None:
         # Speculative decoding: the 0.6B model drafts tokens, the 1.7B verifies
         # them in parallel — more GPU utilization, same output quality.
         draft_model = None
-        if job["turbo"] and job["model"] == "1.7b":
+        if job["turbo"] and models.base_of(job["model"]) == "1.7b":
             _update(job_id, detail="Loading 0.6B draft model for speculative decoding")
             # Pass the Session-owned model itself. Passing its string id makes
             # mlx-qwen3-asr load a second independent 0.6B copy into its global
@@ -439,6 +449,64 @@ def _run_job(job_id: str) -> None:
             path.unlink(missing_ok=True)
 
 
+
+def _run_prepare(job_id: str, job: dict) -> None:
+    """Convert a catalog model on the worker, reporting each step on the job."""
+    cancelled = job["cancelled"]
+    model_id = job["model"]
+    try:
+        if cancelled.is_set():
+            raise _JobCancelled
+        if stopping.is_set():
+            raise RuntimeError("Server stopped before this job started")
+        base = models.base_of(model_id)
+        _update(job_id, status="loading", detail=f"Checking {models.label(base)} weights")
+
+        def report_download(done: int, total: int) -> None:
+            _update(
+                job_id,
+                detail=f"Downloading {models.label(base)} · {done / 1e9:.1f} of {total / 1e9:.1f} GB",
+                progress=(done / total) if total else 0.0,
+            )
+
+        sessions.ensure_downloaded(base, progress=report_download)
+        if cancelled.is_set():
+            raise _JobCancelled
+        if stopping.is_set():
+            raise RuntimeError("Server stopped before this job finished")
+        # The conversion holds a full fp16 copy of the model while it works.
+        # Anything loaded for transcription would sit next to it; on an 8 GB
+        # Mac that is the difference between finishing and swapping. The next
+        # job reloads what it needs in a few seconds.
+        if sessions.loaded_models():
+            _update(job_id, detail="Releasing loaded models")
+            sessions.drop_all()
+        _update(job_id, status="processing", started_at=time.time(), progress=0.0)
+
+        def report(detail: str) -> None:
+            _update(job_id, detail=detail)
+
+        models.convert(model_id, report=report, cancelled=cancelled)
+        with jobs_lock:
+            current = jobs.get(job_id)
+            if cancelled.is_set():
+                raise _JobCancelled
+            if stopping.is_set() or current is None or current.get("status") in config.TERMINAL_JOB_STATUSES:
+                raise RuntimeError("Server stopped before this job finished")
+            current.update(
+                status="done", progress=1.0, detail="Ready", finished_at=time.time(),
+                result={"model": model_id, "path": models.source(model_id)},
+            )
+            _prune_jobs_locked()
+    except (_JobCancelled, models.ConversionCancelled):
+        _update(job_id, status="cancelled", detail="Cancelled", finished_at=time.time())
+    except Exception as exc:
+        if cancelled.is_set():
+            _update(job_id, status="cancelled", detail="Cancelled", finished_at=time.time())
+        else:
+            _update(job_id, status="error", detail=f"{type(exc).__name__}: {exc}", finished_at=time.time())
+
+
 # ---------------------------------------------------------------------------
 # Operations the API exposes
 # ---------------------------------------------------------------------------
@@ -449,6 +517,7 @@ def new_record(job_id: str, *, filename: str | None, size: int, model: str,
     """A fresh queued job record for a staged upload."""
     return {
         "id": job_id,
+        "kind": "transcribe",
         "status": "queued",
         "detail": "Queued",
         "progress": 0.0,
@@ -487,6 +556,59 @@ def register(job_id: str, record: dict) -> None:
             jobs.pop(job_id, None)
             raise
     future.add_done_callback(lambda _future: _forget_future(job_id))
+
+
+def converting_models() -> set[str]:
+    """Catalog ids with a prepare job that has not finished."""
+    with jobs_lock:
+        return {
+            job["model"] for job in jobs.values()
+            if job.get("kind") == "prepare" and job.get("status") not in config.TERMINAL_JOB_STATUSES
+        }
+
+
+def prepare(model_id: str) -> str:
+    """Queue the conversion of a catalog model; returns the job id.
+
+    One conversion per model at a time: a second click while the first is
+    queued or running answers with the conflict rather than a second job
+    that would redo the work and race the first for the output directory.
+    """
+    if model_id not in config.MODEL_CATALOG:
+        raise JobNotFound(model_id)
+    if not models.is_quantized(model_id):
+        raise JobConflict(f"{models.label(model_id)} is downloaded on first use; there is nothing to prepare")
+    if models.converted(model_id):
+        raise JobConflict(f"{models.label(model_id)} is already prepared")
+    if model_id in converting_models():
+        raise JobConflict(f"{models.label(model_id)} is already being prepared")
+    job_id = uuid.uuid4().hex[:12]
+    record = {
+        "id": job_id,
+        "kind": "prepare",
+        "status": "queued",
+        "detail": "Queued",
+        "progress": 0.0,
+        "filename": None,
+        "model": model_id,
+        "label": models.label(model_id),
+        "source": "prepare",
+        "partial": None,
+        "cancelled": threading.Event(),
+        "created_at": time.time(),
+        "result": None,
+    }
+    register(job_id, record)
+    return job_id
+
+
+def active_model_use(model_id: str) -> bool:
+    """Whether an unfinished job needs this model, so it must not be removed."""
+    with jobs_lock:
+        return any(
+            job.get("model") == model_id and job.get("status") not in config.TERMINAL_JOB_STATUSES
+            for job in jobs.values()
+        )
 
 
 def listing() -> list[dict]:
@@ -530,7 +652,8 @@ def cancel(job_id: str) -> str:
         job["cancelled"].set()
         if job["status"] == "queued":
             job.update(status="cancelled", detail="Cancelled", finished_at=time.time())
-            Path(job["path"]).unlink(missing_ok=True)
+            if job.get("path"):
+                Path(job["path"]).unlink(missing_ok=True)
             return "cancelled"
         job.update(cancel_requested=True,
                    detail="Cancelling — finishing the current chunk")
@@ -551,6 +674,8 @@ def retry(job_id: str) -> str:
             raise JobNotFound(job_id)
         if source["status"] != "error":
             raise JobConflict("Only a failed job can be retried")
+        if source.get("kind") == "prepare":
+            raise JobConflict("Prepare the model again from the model picker")
         if _retry_outstanding(source):
             # One worker and one GPU: a double-clicked Retry would otherwise
             # stage a second copy of the upload and transcribe it twice. Once
@@ -651,6 +776,9 @@ def _warm(model_key: str) -> None:
     _warming += 1
     try:
         if stopping.is_set():
+            return
+        if not models.usable(model_key):
+            # A variant chosen but not yet prepared; the picker says so.
             return
         sessions.ensure_downloaded(model_key)
         if stopping.is_set():

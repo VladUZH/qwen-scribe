@@ -6,6 +6,61 @@ details when clearly documented.
 
 ## [Unreleased]
 
+### Changed
+
+- The page is a drop zone again. It had grown to hold every control at once:
+  three transcription options, twelve dictation and performance settings, and
+  a note under each of two model pickers, all on screen together. What stays
+  is the drop zone, the model and language, the timestamp toggle, and the
+  one-line dictation card. Everything else moved behind the gear in the
+  corner, into a **Settings** panel with four groups — Transcription,
+  Dictation, Models, Advanced — one visible at a time. **Set up** on the
+  dictation card opens the panel at its own group, and Escape, the close
+  button, or a click on the page closes it
+- Closing the settings panel always hands focus back to something: the
+  control that opened it, or the gear when that control is gone. Safari,
+  following the platform, does not focus a button when it is clicked, so on
+  a Mac there was nothing to restore and focus was left nowhere
+- A setting that is quietly changing every transcript is named on the page
+  rather than left behind a panel: while a vocabulary hint is set, a label
+  above the dictation card says how many terms it holds and opens the field
+- The page says something about the model only when the chosen one cannot be
+  used yet: one line naming what it needs and the button that does it. The
+  whole catalog, with each entry's state, memory, size on disk and its one
+  action, is in **Settings → Models**
+
+### Added
+
+- Quantized models in the picker: **1.7B 8-bit** (fastest accurate) and
+  **0.6B 4-bit** (fastest) next to the two upstream models. Either is made
+  on this Mac from the upstream weights when you press **Prepare** under the
+  picker; the conversion runs in the same queue as transcriptions, shows its
+  steps, can be cancelled, and leaves the variant under
+  `~/Library/Application Support/Qwen Scribe/models`, where it survives app
+  upgrades. **Remove** deletes it again. The note under each picker says
+  what the chosen model needs and how much memory it takes; `docs/models.md`
+  says what to expect from each. The default stays the fp16 1.7B
+- `GET /api/models` lists the catalog with each entry's state; `POST
+  /api/models/{id}/prepare` and `DELETE /api/models/{id}` manage a variant
+- `docs/models.md` carries measured figures for the 0.6B 4-bit conversion,
+  from a real conversion on a macOS runner: 5 to 7 times faster than fp16,
+  0.54 GB on disk, and the three transcripts it differed on, including the
+  one word Japanese got wrong
+
+### Changed
+
+- `compare_models.py` compares Chinese, Japanese and Korean character by
+  character. Those scripts are written without spaces, or space the same
+  words differently, so a whitespace word is not a unit of meaning: two
+  identical Korean transcripts were being reported as 22% different, while
+  a single wrong Japanese word hid inside one long token
+- A conversion made with `quantize_8bit.py` no longer silently replaces the
+  1.7B; it is its own picker entry. An existing `models/qwen3-asr-1.7b-8bit`
+  next to `server.py` is moved into the store when the server starts, so it
+  is offered rather than made again. `QWEN_SCRIBE_MODEL_DIR` now names the
+  store; `quantize_8bit.py` takes the variant as an argument and
+  `compare_models.py` compares every prepared variant with its fp16 model
+
 ## [0.3.0-beta.1] - 2026-09-04
 
 The dictation release. Everything a daily dictation user asked for after

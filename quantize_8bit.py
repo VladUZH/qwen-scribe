@@ -1,62 +1,40 @@
 """
-Convert Qwen3-ASR-1.7B to 8-bit quantized weights (one-time, ~2 min).
-
-Produces ./models/qwen3-asr-1.7b-8bit/ which the server picks up
-automatically on next start. Expected: ~3x faster decoding, WER delta
-within noise of fp16 (per the library's committed benchmarks).
+Prepare a quantized model from the command line (the app's model picker does
+the same with a Prepare button). Loads the upstream fp16 weights, quantizes
+them on this Mac, and writes the variant into the app's model store, where
+the server offers it in the picker on its next start.
 
 Usage:
     source .venv/bin/activate
-    python quantize_8bit.py
+    python quantize_8bit.py              # 1.7B 8-bit, the original purpose of this script
+    python quantize_8bit.py 0.6b-4bit    # any quantized variant in the catalog
+
+Expected for 1.7B 8-bit: ~3x faster decoding, WER delta within noise of fp16
+(per the library's committed benchmarks); docs/models.md has the details and
+compare_models.py measures it on your own recordings.
 """
 
 from __future__ import annotations
 
-import json
-import shutil
-from pathlib import Path
+import sys
 
-import mlx.core as mx
-import mlx.nn as nn
-from mlx.utils import tree_flatten
-
-from mlx_qwen3_asr.load_models import _resolve_path, load_model
-
-SOURCE = "Qwen/Qwen3-ASR-1.7B"
-BITS = 8
-GROUP_SIZE = 64
-OUT_DIR = Path(__file__).resolve().parent / "models" / "qwen3-asr-1.7b-8bit"
+from qwen_scribe import models
 
 
 def main() -> None:
-    print(f"Loading {SOURCE} (downloads weights on first run)...")
-    model, _config = load_model(SOURCE, dtype=mx.float16)
-    source_dir = _resolve_path(SOURCE)
-
-    print(f"Quantizing to {BITS}-bit (group size {GROUP_SIZE})...")
-    nn.quantize(model, bits=BITS, group_size=GROUP_SIZE)
-
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    print("Saving quantized weights...")
-    weights = dict(tree_flatten(model.parameters()))
-    mx.save_safetensors(str(OUT_DIR / "model.safetensors"), weights)
-
-    # Copy config + tokenizer files from the source snapshot; skip the
-    # original fp16/bf16 weights and index files.
-    skipped = {".safetensors", ".bin", ".pt", ".gguf"}
-    for f in source_dir.iterdir():
-        if f.is_file() and f.suffix not in skipped and "index" not in f.name:
-            shutil.copy2(f, OUT_DIR / f.name)
-
-    (OUT_DIR / "quantization_config.json").write_text(
-        json.dumps({"bits": BITS, "group_size": GROUP_SIZE}, indent=2)
-    )
-
-    size_gb = sum(p.stat().st_size for p in OUT_DIR.iterdir()) / 1e9
-    print(f"\nDone: {OUT_DIR}  ({size_gb:.2f} GB)")
-    print("Restart the server (./run.sh) — it will use the 8-bit model automatically.")
-    print("Recommended: verify on your own audio first:  python compare_models.py <file>")
+    choices = [m for m in models.ids() if models.is_quantized(m)]
+    variant = sys.argv[1] if len(sys.argv) > 1 else "1.7b-8bit"
+    if variant not in choices:
+        sys.exit(f"Unknown variant '{variant}'. Choose one of: {', '.join(choices)}")
+    if models.converted(variant):
+        sys.exit(f"{models.label(variant)} is already prepared at {models.source(variant)}")
+    base = models.base_of(variant)
+    print(f"Preparing {models.label(variant)} from {models.label(base)} (downloads its weights on first run)...")
+    target = models.convert(variant, report=lambda detail: print(f"  {detail}..."))
+    entry = models.describe(variant)
+    print(f"\nDone: {target}  ({entry['disk_gb']} GB)")
+    print("Restart the server (./run.sh or the app) and choose it in the model picker.")
+    print(f"Recommended: verify on your own audio first:  python compare_models.py --variant {variant} <file>")
 
 
 if __name__ == "__main__":

@@ -21,7 +21,6 @@ PORT = int(os.environ.get("QWEN_SCRIBE_PORT", "8990"))
 # repository and in the app's private runtime copy.
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
-MODEL_DIR = Path(os.environ.get("QWEN_SCRIBE_MODEL_DIR", BASE_DIR / "models")).expanduser()
 
 # Completed transcripts live outside the project folder so they survive app
 # upgrades, moves, and browser-cache clearing. Tests and portable installs can
@@ -35,15 +34,56 @@ APP_DATA_DIR = Path(
 TRANSCRIPTS_DIR = APP_DATA_DIR / "transcripts"
 TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 
-# If quantize_8bit.py has produced a local 8-bit model, use it for "1.7b".
-_QUANT_1_7B = MODEL_DIR / "qwen3-asr-1.7b-8bit"
-_QUANT_ACTIVE = (_QUANT_1_7B / "quantization_config.json").exists()
+# Where the models the app converts on this Mac are stored, one directory per
+# catalog entry. In the app data directory rather than next to the source,
+# so an app upgrade, which replaces the runtime copy, keeps them. Before the
+# catalog, quantize_8bit.py wrote into ./models next to server.py; the
+# server adopts such a directory on start (models.adopt_legacy).
+MODEL_DIR = Path(os.environ.get("QWEN_SCRIBE_MODEL_DIR", APP_DATA_DIR / "models")).expanduser()
+LEGACY_MODEL_DIR = BASE_DIR / "models"
 
-MODELS = {
-    "1.7b": str(_QUANT_1_7B) if _QUANT_ACTIVE else "Qwen/Qwen3-ASR-1.7B",
-    "0.6b": "Qwen/Qwen3-ASR-0.6B",   # speed-first, ~1.2 GB
+# Every model the picker offers. The two upstream models are downloaded from
+# Hugging Face on first use; the quantized variants are made on this Mac from
+# those weights (SECURITY.md's supply-chain stance: weights come from the
+# upstream repository, nothing else is fetched) and cost a few minutes once.
+# memory_gb is the unified memory the loaded weights take, from the README
+# for the upstream models and scaled by the bits for the variants; the
+# catalog reports the measured size of a converted variant next to it.
+# note is the two-word summary the picker shows; the longer quality
+# expectations live in docs/models.md.
+MODEL_CATALOG = {
+    "1.7b": {
+        "label": "1.7B", "note": "accuracy", "repo": "Qwen/Qwen3-ASR-1.7B",
+        "memory_gb": 3.4,
+    },
+    "1.7b-8bit": {
+        "label": "1.7B 8-bit", "note": "fastest accurate", "base": "1.7b",
+        "bits": 8, "group_size": 64, "memory_gb": 1.9,
+    },
+    "0.6b": {
+        "label": "0.6B", "note": "speed", "repo": "Qwen/Qwen3-ASR-0.6B",
+        "memory_gb": 1.2,
+    },
+    "0.6b-4bit": {
+        "label": "0.6B 4-bit", "note": "fastest", "base": "0.6b",
+        "bits": 4, "group_size": 64, "memory_gb": 0.5,
+    },
 }
 DEFAULT_MODEL = "1.7b"
+
+
+def model_source(model_id: str) -> str:
+    """What mlx_qwen3_asr loads for a catalog id: a Hub repository for the
+    upstream models, the converted directory for a quantized variant."""
+    entry = MODEL_CATALOG[model_id]
+    if "repo" in entry:
+        return entry["repo"]
+    return str(MODEL_DIR / f"qwen3-asr-{model_id}")
+
+
+# Catalog id -> what is loaded, for the places that only need the mapping.
+# Read through the module so a test that points MODEL_DIR elsewhere is seen.
+MODELS = {model_id: model_source(model_id) for model_id in MODEL_CATALOG}
 
 # Every language Qwen3-ASR supports, so the picker never hides one that works
 # — mlx_qwen3_asr.tokenizer.known_language_names(). "auto" lets the model

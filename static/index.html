@@ -9,7 +9,8 @@
     --bg: #0F0E16;
     --panel: #171624;
     --panel-2: #1D1B2E;
-    --line: #2A2840;
+    --line: #262437;
+    --line-strong: #322F49;
     --text: #EDEBF6;
     --muted: #8B87A6;
     --amber: #F9A03F;
@@ -18,10 +19,11 @@
     --ok: #6FCF97;
     --err: #E5636F;
     --radius: 14px;
+    --radius-sm: 10px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   /* A class that sets `display` outranks the user agent's [hidden] rule, so
-     without this a hidden .options grid stays on screen. */
+     without this a hidden flex or grid container stays on screen. */
   [hidden] { display: none !important; }
   html { color-scheme: dark; }
   body {
@@ -32,13 +34,59 @@
     line-height: 1.55;
     min-height: 100vh;
   }
-  .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 96px; }
+  .wrap { max-width: 700px; margin: 0 auto; padding: 36px 24px 80px; }
 
-  /* Header */
-  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 40px; }
+  /* ── Shared controls ──────────────────────────────────────────────────── */
+  select, input[type=text], input[type=search], textarea {
+    background: var(--panel);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font: inherit;
+    font-size: 13.5px;
+    padding: 8px 10px;
+  }
+  select:focus-visible, input:focus-visible, textarea:focus-visible { border-color: var(--amber); outline: none; }
+  textarea { resize: vertical; min-height: 56px; line-height: 1.45; width: 100%; }
+  input[type=file] { display: none; }
+
+  button.act {
+    background: var(--panel-2);
+    border: 1px solid var(--line-strong);
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    border-radius: 9px;
+    padding: 7px 13px;
+    cursor: pointer;
+    transition: border-color 140ms ease, color 140ms ease;
+  }
+  button.act:hover, button.act:focus-visible { border-color: var(--amber); outline: none; }
+  button.act.danger { color: var(--err); }
+  button.act.primary { background: var(--amber); border-color: var(--amber); color: #241704; font-weight: 600; }
+  button.act.primary:hover, button.act.primary:focus-visible { filter: brightness(1.08); }
+  button.act:disabled { cursor: default; opacity: .45; }
+  button.act:disabled:hover { border-color: var(--line-strong); }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    color: var(--muted);
+    cursor: pointer;
+    transition: color 140ms ease, border-color 140ms ease;
+  }
+  .icon-btn:hover, .icon-btn:focus-visible { color: var(--text); border-color: var(--line-strong); outline: none; }
+  .icon-btn svg { width: 17px; height: 17px; }
+  .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+
+  /* ── Header ───────────────────────────────────────────────────────────── */
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 26px; }
   .wordmark {
     font-family: ui-serif, Georgia, serif;
-    font-size: 28px;
+    font-size: 26px;
     font-weight: 560;
     letter-spacing: -0.01em;
   }
@@ -49,166 +97,126 @@
     background-clip: text;
     color: transparent;
   }
+  .header-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .runtime {
     font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
     font-size: 11.5px;
     color: var(--muted);
+    text-align: right;
+    overflow-wrap: anywhere;
   }
 
-  /* Drop zone */
+  /* ── Drop zone: the one thing this page is for ─────────────────────────── */
   .drop {
-    border: 1.5px dashed var(--line);
+    border: 1.5px dashed var(--line-strong);
     border-radius: var(--radius);
     background: var(--panel);
-    padding: 52px 32px;
+    padding: 42px 28px;
     text-align: center;
     cursor: pointer;
     transition: border-color 160ms ease, background 160ms ease;
   }
   .drop:hover, .drop:focus-visible { border-color: var(--amber); outline: none; }
   .drop.dragover { border-color: var(--amber); background: var(--panel-2); }
-  .drop h2 { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+  .drop h2 { font-size: 17px; font-weight: 600; margin-bottom: 5px; }
   .drop p { color: var(--muted); font-size: 13.5px; }
-  .drop .formats { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; margin-top: 14px; color: var(--muted); opacity: .8; }
-  input[type=file] { display: none; }
+  .drop .formats { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; margin-top: 12px; color: var(--muted); opacity: .75; }
 
-  /* Options */
-  .options {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 12px;
-    margin-top: 16px;
-  }
-  .field label {
-    display: block;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted);
-    margin-bottom: 6px;
-  }
-  select, input[type=text], textarea {
-    width: 100%;
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 9px;
-    color: var(--text);
-    font: inherit;
-    font-size: 13.5px;
-    padding: 9px 10px;
-  }
-  select:focus, input[type=text]:focus, textarea:focus { border-color: var(--amber); outline: none; }
-  textarea { resize: vertical; min-height: 58px; line-height: 1.45; }
-  .field-wide { grid-column: 1 / -1; }
-  .check { display: flex; align-items: center; gap: 8px; padding-top: 26px; }
-  .check input { accent-color: var(--amber); width: 16px; height: 16px; }
-  .check label { font-size: 13.5px; cursor: pointer; white-space: nowrap; }
-  .check .hint { color: var(--muted); font-size: 12px; }
-  .check.plain { padding-top: 0; }
+  /* ── Toolbar: the two choices people actually change, and nothing else ─── */
+  .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 18px; margin-top: 14px; padding: 0 2px; }
+  .tool { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .tool > label { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+  /* Wide enough for the longest model name, capped so the row stays one
+     line: the two choices and the timestamp toggle read as one control. */
+  .tool select { max-width: 230px; }
+  .toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .toggle input { accent-color: var(--amber); width: 15px; height: 15px; }
+  .toolbar-spacer { flex: 1 1 auto; }
 
-  /* Secondary options — present, but not competing with the primary path */
-  .more { margin-top: 14px; }
-  .more > summary {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    width: fit-content;
+  /* Only when the chosen model cannot be used yet: what it needs, and the
+     one button that gets it there. Everything else about models is in
+     Settings → Models. */
+  .warn {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
+    margin-top: 12px;
     font-size: 12.5px;
-    color: var(--muted);
-    cursor: pointer;
-    list-style: none;
-    padding: 4px 0;
+    line-height: 1.5;
+    background: rgba(249, 160, 63, .07);
+    border: 1px solid rgba(249, 160, 63, .3);
+    border-radius: var(--radius-sm);
+    padding: 9px 12px;
   }
-  .more > summary::-webkit-details-marker { display: none; }
-  .more > summary::before {
-    content: "";
-    width: 5px; height: 5px;
-    border-right: 1.5px solid currentColor;
-    border-bottom: 1.5px solid currentColor;
-    transform: rotate(-45deg) translate(-1px, -1px);
-    transition: transform 140ms ease;
-  }
-  .more[open] > summary::before { transform: rotate(45deg) translate(-1px, -1px); }
-  .more > summary:hover, .more > summary:focus-visible { color: var(--text); outline: none; }
-  .more-body { margin-top: 10px; }
-  .more-note { color: var(--muted); font-size: 12px; line-height: 1.55; margin-top: 10px; }
-  .more-note #formatsFull { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; }
+  .warn .act { padding: 4px 11px; font-size: 11.5px; }
 
-  /* Desktop dictation */
-  /* The card keeps its weight — dictation is a real capability, and the panel
-     is what makes it read as one. What it does not get back is the two
-     paragraphs of prose that used to fill it. */
+  /* A setting that is doing something, named where it applies rather than
+     hidden behind a panel nobody opens. */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; padding: 0 2px; }
+  .chip {
+    font-size: 11.5px;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    padding: 3px 10px;
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+    transition: color 140ms ease, border-color 140ms ease;
+  }
+  .chip:hover, .chip:focus-visible { color: var(--text); border-color: var(--amber); outline: none; }
+  .chip b { font-weight: 600; color: var(--text); }
+
+  /* ── Desktop dictation: one line, with its settings a click away ───────── */
   .dictation {
-    margin-top: 22px;
+    margin-top: 20px;
     display: flex;
     align-items: center;
-    gap: 14px;
-    background: linear-gradient(120deg, rgba(70,35,122,.22), rgba(201,54,111,.08));
+    gap: 13px;
+    background: linear-gradient(120deg, rgba(70,35,122,.2), rgba(201,54,111,.07));
     border: 1px solid var(--line);
     border-radius: var(--radius);
-    padding: 15px 17px;
+    padding: 13px 15px;
   }
   .dictation-copy { flex: 1; min-width: 0; }
   .dictation-title { font-size: 13.5px; font-weight: 600; }
-  .dictation-lede { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-top: 2px; }
-  .dictation-permissions { color: var(--amber); font-size: 12.5px; line-height: 1.5; margin-top: 6px; }
-  .menubar-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 10px; padding: 0 3px; }
+  .dictation-lede { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+  .dictation-permissions { color: var(--amber); font-size: 12.5px; line-height: 1.5; margin-top: 5px; }
   .dictation-status { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
   .dictation-status::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: 1px; }
   .dictation-status.ready { color: var(--ok); }
   .dictation-status.ready::before { background: var(--ok); }
   .dictation-status.needs-permission { color: var(--amber); }
   .dictation-status.needs-permission::before { background: var(--amber); }
-  .dictation-settings { margin-top: 12px; }
-  .settings-note { color: var(--muted); font-size: 11.5px; }
-  .settings-note.error { color: var(--err); }
-  kbd { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 3px 7px; white-space: nowrap; }
+  kbd { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; color: var(--text); background: var(--panel-2); border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 6px; padding: 3px 7px; white-space: nowrap; }
 
-  /* Job card */
+  /* ── Job card ─────────────────────────────────────────────────────────── */
   .job {
-    margin-top: 28px;
+    margin-top: 22px;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: var(--radius);
-    padding: 20px 22px;
+    padding: 18px 20px;
     display: none;
   }
   .job.visible { display: block; }
-  .job-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 14px; }
+  .job-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 13px; }
   .job-file { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
   .job-status { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
   .job-status.done { color: var(--ok); }
   .job-status.error { color: var(--err); }
 
   /* Signature: mel-spectrogram progress strip */
-  .spectro {
-    display: flex;
-    gap: 2px;
-    height: 44px;
-    align-items: flex-end;
-    border-radius: 6px;
-    overflow: hidden;
-  }
-  .spectro span {
-    flex: 1;
-    background: var(--line);
-    border-radius: 1.5px;
-    transition: background 240ms ease;
-    min-height: 12%;
-  }
+  .spectro { display: flex; gap: 2px; height: 40px; align-items: flex-end; border-radius: 6px; overflow: hidden; }
+  .spectro span { flex: 1; background: var(--line-strong); border-radius: 1.5px; transition: background 240ms ease; min-height: 12%; }
   .spectro span.lit { animation: pulse 1.4s ease-in-out infinite; }
   @keyframes pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.35); } }
-  @media (prefers-reduced-motion: reduce) {
-    .spectro span.lit { animation: none; }
-  }
-  .job-detail { margin-top: 10px; font-size: 12.5px; color: var(--muted); }
-  .job-error { margin-top: 10px; font-size: 13px; color: var(--err); overflow-wrap: anywhere; }
+  .job-detail { margin-top: 9px; font-size: 12.5px; color: var(--muted); }
+  .job-error { margin-top: 9px; font-size: 13px; color: var(--err); overflow-wrap: anywhere; }
 
-  /* Transcript */
-  .transcript { margin-top: 28px; display: none; }
+  /* ── Transcript ───────────────────────────────────────────────────────── */
+  .transcript { margin-top: 24px; display: none; }
   .transcript.visible { display: block; }
-  .t-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 12px; }
+  .t-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 11px; }
   /* The actions keep their width so a button is never broken across two lines;
      the metadata wraps instead, since truncating it loses the word count. */
   .t-meta {
@@ -221,77 +229,136 @@
   .t-actions { display: flex; gap: 8px; align-items: center; flex: none; }
   .t-actions button.act { white-space: nowrap; }
   .t-toggle { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); white-space: nowrap; cursor: pointer; }
-  button.act {
-    background: var(--panel-2);
-    border: 1px solid var(--line);
-    color: var(--text);
-    font: inherit;
-    font-size: 12.5px;
-    font-weight: 500;
-    border-radius: 8px;
-    padding: 7px 13px;
-    cursor: pointer;
-    transition: border-color 140ms ease;
-  }
-  button.act:hover, button.act:focus-visible { border-color: var(--amber); outline: none; }
-  button.act.danger { color: var(--err); }
-  button.act:disabled { cursor: default; opacity: .45; }
-  button.act:disabled:hover { border-color: var(--line); }
+  .t-toggle input { accent-color: var(--amber); }
   .t-body {
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: var(--radius);
-    padding: 26px 28px;
+    padding: 24px 26px;
     font-size: 14px;
     line-height: 1.68;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     user-select: text;
   }
-  .t-note { margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .t-note { margin-top: 9px; font-size: 12px; color: var(--muted); }
 
-  /* Saved transcripts */
-  .history { margin-top: 52px; padding-top: 28px; border-top: 1px solid var(--line); }
-  .history-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
-  .history-controls { display: flex; align-items: center; gap: 8px; }
-  .history-controls input[type=search] {
-    width: 180px;
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    color: var(--text);
-    font: inherit;
-    font-size: 12.5px;
-    padding: 7px 10px;
-  }
-  .history-controls input[type=search]:focus { border-color: var(--amber); outline: none; }
-  .history-title { display: flex; align-items: baseline; gap: 9px; }
-  .history h2 { font-size: 16px; font-weight: 600; }
-  .history-count { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); }
-  .queue { margin-top: 22px; }
-  .queue h2 { font-size: 16px; font-weight: 600; margin-bottom: 11px; }
-  .queue-list { display: grid; gap: 8px; list-style: none; }
-  .queue-item { display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 11px 14px; }
+  /* ── Queue ────────────────────────────────────────────────────────────── */
+  .queue { margin-top: 24px; }
+  .section-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 11px; }
+  .section-head h2 { font-size: 15px; font-weight: 600; }
+  .section-count { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); }
+  .queue-list { display: grid; gap: 7px; list-style: none; }
+  .queue-item { display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 10px 13px; }
   .queue-name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; flex: 1 1 auto; min-width: 0; }
   .queue-state { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10.5px; color: var(--muted); text-align: right; flex: 0 1 auto; overflow-wrap: anywhere; }
   .queue-item.done .queue-state { color: var(--ok); }
   .queue-item.error .queue-state { color: var(--err); }
   .queue-item .act { padding: 5px 10px; font-size: 11.5px; flex: none; }
-  .history-list { display: grid; gap: 10px; }
-  .history-empty { color: var(--muted); font-size: 13px; text-align: center; background: var(--panel); border: 1px dashed var(--line); border-radius: var(--radius); padding: 28px 18px; }
-  .history-item { background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 15px 16px; }
+
+  /* ── Saved transcripts ────────────────────────────────────────────────── */
+  .history { margin-top: 34px; padding-top: 22px; border-top: 1px solid var(--line); }
+  .history-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 13px; }
+  .history-controls { display: flex; align-items: center; gap: 8px; }
+  .history-controls input[type=search] { width: 170px; font-size: 12.5px; padding: 7px 10px; }
+  .history-list { display: grid; gap: 9px; }
+  .history-empty { color: var(--muted); font-size: 13px; text-align: center; background: var(--panel); border: 1px dashed var(--line-strong); border-radius: var(--radius); padding: 26px 18px; }
+  .history-item { background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 14px 15px; }
   .history-item-head { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; }
   .history-file { font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
   .history-date { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; color: var(--muted); font-size: 10.5px; white-space: nowrap; }
-  .history-preview { color: #B8B4CA; font-size: 12.5px; line-height: 1.55; margin-top: 7px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-  .history-foot { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 11px; }
+  .history-preview { color: #B8B4CA; font-size: 12.5px; line-height: 1.55; margin-top: 6px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .history-foot { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 10px; }
   .history-meta { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; color: var(--muted); font-size: 10.5px; }
   .history-actions { display: flex; gap: 7px; }
   .history-actions .act { padding: 5px 10px; font-size: 11.5px; }
 
+  .foot { margin-top: 34px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+  /* ── Settings sheet: everything advanced, one click away, grouped ──────── */
+  .sheet-backdrop { position: fixed; inset: 0; background: rgba(8, 7, 14, .62); backdrop-filter: blur(2px); z-index: 40; animation: fade-in 180ms ease; }
+  .sheet {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: min(452px, 100vw);
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    border-left: 1px solid var(--line-strong);
+    box-shadow: -26px 0 70px rgba(0, 0, 0, .5);
+    animation: sheet-in 200ms cubic-bezier(.22, .8, .32, 1);
+  }
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes sheet-in { from { transform: translateX(22px); opacity: 0; } to { transform: none; opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .spectro span.lit { animation: none; }
+    .sheet, .sheet-backdrop { animation: none; }
+  }
+  .sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px 12px; }
+  .sheet-head h2 { font-size: 16px; font-weight: 600; }
+  .sheet-tabs { display: flex; gap: 4px; padding: 0 16px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); }
+  .sheet-tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 13px;
+    padding: 8px 10px 9px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 140ms ease, border-color 140ms ease;
+  }
+  .tab:hover, .tab:focus-visible { color: var(--text); outline: none; }
+  .tab[aria-selected=true] { color: var(--text); border-bottom-color: var(--amber); }
+  .sheet-body { flex: 1; overflow-y: auto; padding: 18px 20px 40px; }
+  .group { display: grid; gap: 16px; }
+  .group-lede { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+  .field { display: grid; gap: 6px; }
+  .field > label { font-size: 12.5px; color: var(--muted); }
+  .field > select, .field > input[type=text] { width: 100%; }
+  .field.narrow > select { max-width: 220px; }
+  .field .hint { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+  .field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .opt { display: flex; align-items: flex-start; gap: 9px; }
+  .opt input { accent-color: var(--amber); width: 15px; height: 15px; margin-top: 3px; flex: none; }
+  .opt label { font-size: 13px; cursor: pointer; }
+  .opt .hint { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+  .settings-note { color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+  .settings-note.error { color: var(--err); }
+  /* Inside the sheet, under the dictation model picker. */
+  .model-note { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .model-note .act { padding: 3px 9px; font-size: 11.5px; margin-left: 4px; vertical-align: baseline; }
+  .model-note.attention { color: var(--text); }
+
+  /* Settings → Models: the catalog, with each entry's state and its action. */
+  .model-list { display: grid; }
+  .model-row { display: flex; align-items: flex-start; gap: 12px; padding: 13px 0; border-top: 1px solid var(--line); }
+  .model-row:first-child { border-top: none; padding-top: 0; }
+  .model-main { flex: 1; min-width: 0; }
+  .model-name { font-size: 13.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .model-meta { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 2px; }
+  .model-row .act { padding: 5px 11px; font-size: 11.5px; flex: none; }
+  .pill {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    font-size: 10px;
+    letter-spacing: .02em;
+    color: var(--muted);
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    padding: 1px 7px;
+    font-weight: 400;
+  }
+  .pill.ready { color: var(--ok); border-color: rgba(111, 207, 151, .35); }
+  .pill.working { color: var(--amber); border-color: rgba(249, 160, 63, .35); }
+  .pill.loaded { color: var(--magenta); border-color: rgba(201, 54, 111, .4); }
+
   @media (max-width: 560px) {
-    .options { grid-template-columns: 1fr 1fr; }
-    .check { padding-top: 0; grid-column: 1 / -1; }
+    .wrap { padding: 24px 16px 64px; }
+    header { align-items: flex-start; }
+    .runtime { display: none; }
     .t-head { flex-direction: column; align-items: flex-start; gap: 10px; }
     .dictation { align-items: flex-start; }
     .dictation-status { display: none; }
@@ -302,6 +369,8 @@
     .history-head { flex-direction: column; align-items: flex-start; }
     .history-controls { flex-wrap: wrap; }
     .history-controls input[type=search] { width: 100%; }
+    .sheet { border-left: none; }
+    .field-pair { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -309,7 +378,17 @@
 <div class="wrap">
   <header>
     <div class="wordmark">Qwen <em>Scribe</em></div>
-    <div class="runtime" id="runtime">Qwen3-ASR · MLX · Metal</div>
+    <div class="header-right">
+      <div class="runtime" id="runtime">Qwen3-ASR · MLX · Metal</div>
+      <button class="icon-btn" id="btnSettings" aria-expanded="false" aria-controls="settings"
+              aria-label="Settings" title="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.1"/>
+          <path d="M19.4 15a1.7 1.7 0 0 0 .33 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.33 1.7 1.7 0 0 0-1 1.56V21a2 2 0 1 1-4 0v-.07a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.87.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .33-1.87 1.7 1.7 0 0 0-1.56-1H3a2 2 0 1 1 0-4h.07a1.7 1.7 0 0 0 1.56-1.1 1.7 1.7 0 0 0-.33-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.33H9a1.7 1.7 0 0 0 1-1.56V3a2 2 0 1 1 4 0v.07a1.7 1.7 0 0 0 1 1.56 1.7 1.7 0 0 0 1.87-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.33 1.87V9a1.7 1.7 0 0 0 1.56 1H21a2 2 0 1 1 0 4h-.07a1.7 1.7 0 0 0-1.53 1z"/>
+        </svg>
+      </button>
+    </div>
   </header>
 
   <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload audio or video files">
@@ -319,39 +398,19 @@
   </div>
   <input type="file" id="file" multiple accept="audio/*,video/*,.mkv,.opus,.qta">
 
-  <div class="options">
-    <div class="field">
+  <div class="toolbar">
+    <div class="tool">
       <label for="model">Model</label>
-      <select id="model">
-        <option value="1.7b">1.7B — accuracy</option>
-        <option value="0.6b">0.6B — speed</option>
-      </select>
+      <select id="model"></select>
     </div>
-    <div class="field">
+    <div class="tool">
       <label for="language">Language</label>
       <select id="language"></select>
     </div>
-    <div class="check">
-      <input type="checkbox" id="timestamps">
-      <label for="timestamps">Word timestamps <span class="hint">for .srt</span></label>
-    </div>
+    <label class="toggle"><input type="checkbox" id="timestamps"> Word timestamps</label>
   </div>
-
-  <details class="more" id="moreOptions">
-    <summary>More options</summary>
-    <div class="more-body">
-      <div class="field">
-        <label for="context">Domain vocabulary</label>
-        <input type="text" id="context" maxlength="2000" placeholder="Rare names and terms the audio contains — space separated, e.g. EBITDA CapEx ESG">
-      </div>
-      <p class="more-note">
-        Accepts <span id="formatsFull">audio and video files</span>.
-        Up to 4 GB per file: the upload is staged on disk before transcribing, so
-        one job briefly needs twice the file's size free. For a longer video,
-        transcribe its extracted audio track instead.
-      </p>
-    </div>
-  </details>
+  <div class="warn" id="modelNote" hidden></div>
+  <div class="chips" id="activeChips" hidden></div>
 
   <div class="dictation" aria-live="polite">
     <kbd id="dictationKey">Right ⌘</kbd>
@@ -361,72 +420,8 @@
       <p class="dictation-permissions" id="dictationPermissions" hidden></p>
     </div>
     <div class="dictation-status" id="dictationStatus">starting</div>
-    <button class="act" id="btnDictationSetup" aria-expanded="false"
-            aria-controls="dictationSettings" hidden>Set up</button>
+    <button class="act" id="btnDictationSetup" aria-controls="settings" hidden>Set up</button>
   </div>
-
-  <div class="options dictation-settings" id="dictationSettings" hidden>
-    <div class="field">
-      <label for="setHotkey">Push-to-talk key</label>
-      <select id="setHotkey"></select>
-    </div>
-    <div class="field">
-      <label for="setModel">Dictation model</label>
-      <select id="setModel"></select>
-    </div>
-    <div class="field">
-      <label for="setLanguage">Dictation language</label>
-      <select id="setLanguage"></select>
-    </div>
-    <div class="field">
-      <label for="setMode">Mode</label>
-      <select id="setMode"></select>
-    </div>
-    <div class="field">
-      <label for="setMaxSeconds">Longest recording</label>
-      <select id="setMaxSeconds">
-        <option value="60">1 minute</option>
-        <option value="120">2 minutes</option>
-        <option value="180">3 minutes</option>
-        <option value="300">5 minutes</option>
-        <option value="600">10 minutes</option>
-      </select>
-    </div>
-    <div class="field field-wide">
-      <label for="setDictionary">Dictionary</label>
-      <textarea id="setDictionary" maxlength="2000" rows="2" placeholder="Names and terms you dictate often, space separated — sent with every dictation as a vocabulary hint"></textarea>
-    </div>
-    <div class="check plain field-wide">
-      <input type="checkbox" id="setSaveHistory">
-      <label for="setSaveHistory">Save dictations to history <span class="hint">off keeps each one only until it is pasted</span></label>
-    </div>
-    <div class="check plain field-wide">
-      <input type="checkbox" id="setCommands">
-      <label for="setCommands">Spoken commands <span class="hint">“new line” and “new paragraph”, said on their own, become breaks</span></label>
-    </div>
-    <div class="field field-wide">
-      <label for="setReplacements">Replacements</label>
-      <textarea id="setReplacements" rows="3" placeholder="One per line: what you say => what to paste, e.g. my email => sam@example.com"></textarea>
-      <div class="settings-note" id="replacementsNote"></div>
-    </div>
-    <div class="field">
-      <label for="setUnload">Unload idle models after</label>
-      <select id="setUnload">
-        <option value="0">Never</option>
-        <option value="10">10 minutes</option>
-        <option value="20">20 minutes</option>
-        <option value="60">1 hour</option>
-        <option value="240">4 hours</option>
-      </select>
-    </div>
-    <div class="check">
-      <input type="checkbox" id="setPreload">
-      <label for="setPreload">Load the dictation model at launch</label>
-    </div>
-    <div class="settings-note field-wide" id="settingsNote">Changes apply to desktop dictation within about ten seconds.</div>
-  </div>
-
-  <p class="menubar-note">Runs from the menu bar — the waveform icon has Open, Restart Server and Quit. Closing this tab does not stop it.</p>
 
   <div class="job" id="job">
     <div class="job-head">
@@ -439,7 +434,7 @@
   </div>
 
   <section class="queue" id="queue" aria-labelledby="queueHeading" hidden>
-    <h2 id="queueHeading">Queue</h2>
+    <div class="section-head"><h2 id="queueHeading">Queue</h2></div>
     <ul class="queue-list" id="queueList"></ul>
     <div class="job-error" id="queueError"></div>
   </section>
@@ -460,9 +455,9 @@
 
   <section class="history" aria-labelledby="historyHeading">
     <div class="history-head">
-      <div class="history-title">
+      <div class="section-head">
         <h2 id="historyHeading">Saved transcripts</h2>
-        <span class="history-count" id="historyCount"></span>
+        <span class="section-count" id="historyCount"></span>
       </div>
       <div class="history-controls">
         <input type="search" id="historySearch" placeholder="Search transcripts" aria-label="Search saved transcripts" hidden>
@@ -474,7 +469,141 @@
       <div class="history-empty">Loading saved transcripts…</div>
     </div>
   </section>
+
+  <p class="foot">Runs from the menu bar — the waveform icon has Open, Restart Server and Quit.
+     Closing this tab does not stop it.</p>
 </div>
+
+<div class="sheet-backdrop" id="settingsBackdrop" hidden></div>
+<aside class="sheet" id="settings" role="dialog" aria-modal="true" aria-labelledby="settingsHeading" hidden>
+  <div class="sheet-head">
+    <h2 id="settingsHeading">Settings</h2>
+    <button class="icon-btn" id="btnSettingsClose" aria-label="Close settings" title="Close">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="sheet-tabs" id="settingsTabs" role="tablist" aria-label="Settings sections">
+    <button class="tab" role="tab" id="tabTranscription" data-group="transcription"
+            aria-controls="groupTranscription" aria-selected="true">Transcription</button>
+    <button class="tab" role="tab" id="tabDictation" data-group="dictation"
+            aria-controls="groupDictation" aria-selected="false">Dictation</button>
+    <button class="tab" role="tab" id="tabModels" data-group="models"
+            aria-controls="groupModels" aria-selected="false">Models</button>
+    <button class="tab" role="tab" id="tabAdvanced" data-group="advanced"
+            aria-controls="groupAdvanced" aria-selected="false">Advanced</button>
+  </div>
+
+  <div class="sheet-body">
+    <section class="group" id="groupTranscription" role="tabpanel" aria-labelledby="tabTranscription">
+      <p class="group-lede">Applies to files you drop on the page. The model and language are
+         on the page itself, since those are the two worth changing often.</p>
+      <div class="field">
+        <label for="context">Domain vocabulary</label>
+        <textarea id="context" maxlength="2000" rows="2"
+                  placeholder="Rare names and terms the audio contains, space separated — e.g. EBITDA CapEx ESG"></textarea>
+        <span class="hint">Sent with every file as the model's vocabulary hint, up to 2000 characters.</span>
+      </div>
+    </section>
+
+    <section class="group" id="groupDictation" role="tabpanel" aria-labelledby="tabDictation" hidden>
+      <div class="field-pair">
+        <div class="field">
+          <label for="setHotkey">Push-to-talk key</label>
+          <select id="setHotkey"></select>
+        </div>
+        <div class="field">
+          <label for="setMode">Mode</label>
+          <select id="setMode"></select>
+        </div>
+      </div>
+      <div class="field-pair">
+        <div class="field">
+          <label for="setModel">Model</label>
+          <select id="setModel"></select>
+        </div>
+        <div class="field">
+          <label for="setLanguage">Language</label>
+          <select id="setLanguage"></select>
+        </div>
+      </div>
+      <p class="model-note" id="setModelNote" hidden></p>
+      <div class="field narrow">
+        <label for="setMaxSeconds">Longest recording</label>
+        <select id="setMaxSeconds">
+          <option value="60">1 minute</option>
+          <option value="120">2 minutes</option>
+          <option value="180">3 minutes</option>
+          <option value="300">5 minutes</option>
+          <option value="600">10 minutes</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="setDictionary">Dictionary</label>
+        <textarea id="setDictionary" maxlength="2000" rows="2"
+                  placeholder="Names and terms you dictate often, space separated"></textarea>
+        <span class="hint">Sent with every dictation as the vocabulary hint — this is where
+              Qwen3-ASR earns its keep on names.</span>
+      </div>
+      <div class="opt">
+        <input type="checkbox" id="setSaveHistory">
+        <label for="setSaveHistory">Save dictations to history
+          <span class="hint">Off keeps each one only until it is pasted.</span></label>
+      </div>
+      <div class="opt">
+        <input type="checkbox" id="setCommands">
+        <label for="setCommands">Spoken commands
+          <span class="hint">“New line” and “new paragraph”, said on their own, become breaks.</span></label>
+      </div>
+      <div class="field">
+        <label for="setReplacements">Replacements</label>
+        <textarea id="setReplacements" rows="3"
+                  placeholder="One per line: what you say => what to paste&#10;my email => sam@example.com"></textarea>
+        <div class="settings-note" id="replacementsNote"></div>
+      </div>
+      <div class="settings-note" id="settingsNote">Changes apply to desktop dictation within about ten seconds.</div>
+    </section>
+
+    <section class="group" id="groupModels" role="tabpanel" aria-labelledby="tabModels" hidden>
+      <p class="group-lede">The two Qwen3-ASR models download from Hugging Face on first use.
+         The quantized variants are made here on this Mac from those same weights, a few
+         minutes once, and stay until you remove them.</p>
+      <div class="model-list" id="modelList"></div>
+      <p class="group-lede" id="modelListNote"></p>
+    </section>
+
+    <section class="group" id="groupAdvanced" role="tabpanel" aria-labelledby="tabAdvanced" hidden>
+      <div class="field narrow">
+        <label for="setUnload">Unload idle models after</label>
+        <select id="setUnload">
+          <option value="0">Never</option>
+          <option value="10">10 minutes</option>
+          <option value="20">20 minutes</option>
+          <option value="60">1 hour</option>
+          <option value="240">4 hours</option>
+        </select>
+        <span class="hint">A model nobody has used for this long gives its memory back to the
+              Mac; the next use reloads it in a few seconds.</span>
+      </div>
+      <div class="opt">
+        <input type="checkbox" id="setPreload">
+        <label for="setPreload">Load the dictation model at launch
+          <span class="hint">So the first dictation of the day is not the slow one.</span></label>
+      </div>
+      <p class="group-lede">
+        Accepts <span class="mono" id="formatsFull">audio and video files</span>.
+        Up to 4 GB per file: the upload is staged on disk before transcribing, so one job
+        briefly needs twice the file's size free. For a longer video, transcribe its
+        extracted audio track instead.
+      </p>
+      <p class="group-lede">
+        Transcripts, settings and prepared models live in
+        <span class="mono">~/Library/Application Support/Qwen Scribe</span>.
+        Nothing leaves this Mac.
+      </p>
+    </section>
+  </div>
+</aside>
 
 <script src="/static/transcript.js"></script>
 <script>
@@ -568,7 +697,10 @@
       sel.appendChild(o);
     });
     sel.value = cfg.languages.includes("English") ? "English" : "auto";
-    $("model").value = cfg.default_model;
+    catalogDefault = cfg.default_model;
+    // The catalog request fills the picker with labels and states; should it
+    // fail, the bare ids from here still make the picker usable.
+    if ($("model").options.length === 0) fillModelPicker($("model"), cfg.models || [], cfg.default_model);
     // The server owns the supported-format list; mirror it so the caption,
     // the picker filter, and the upload check can never drift apart.
     if (Array.isArray(cfg.extensions) && cfg.extensions.length) {
@@ -583,10 +715,6 @@
         shown.join(" · ") + (rest > 0 ? ` · +${rest} more` : "");
       $("formatsFull").textContent = bare.join(", ");
       $("file").accept = cfg.extensions.join(",");
-    }
-    if (cfg.quantized) {
-      $("runtime").textContent = "Qwen3-ASR · MLX · Metal · 8-bit";
-      $("model").options[0].textContent = "1.7B — accuracy (8-bit)";
     }
     if (!cfg.ffmpeg) {
       $("runtime").textContent = "ffmpeg missing — install it with Homebrew or MacPorts";
@@ -728,7 +856,9 @@
       row.className = `queue-item ${job.status}`;
       const name = document.createElement("span");
       name.className = "queue-name";
-      name.textContent = job.filename || "(unnamed)";
+      name.textContent = job.kind === "prepare"
+        ? `${job.status === "done" ? "Prepared" : "Preparing"} ${job.label || job.model}`
+        : (job.filename || "(unnamed)");
       const state = document.createElement("span");
       state.className = "queue-state";
       const place = waiting.indexOf(job);
@@ -736,6 +866,19 @@
         ? (place === 0 ? "queued — next" : `queued — ${place + (running ? 1 : 0)} ahead`)
         : (job.detail || job.status);
       row.append(name, state);
+      if (job.kind === "prepare") {
+        // Nothing to open: the result is a model in the picker. A failed
+        // conversion is started afresh rather than retried from an upload
+        // it never had.
+        if (!FINISHED.has(job.status)) {
+          const cancel = queueButton("Cancel", true, () => act(`/api/jobs/${job.id}/cancel`));
+          cancel.disabled = Boolean(job.cancel_requested);
+          row.append(cancel);
+        } else if (job.status === "error") {
+          row.append(queueButton("Prepare again", false, () => act(`/api/models/${job.model}/prepare`)));
+        }
+        return row;
+      }
       if (job.status === "done" && !job.ephemeral) {
         // A retried or background job finishes outside the detail panel's
         // poll loop, so this is the only way to reach its transcript. A
@@ -783,6 +926,7 @@
   let seenDone = null;
   let queueSeq = 0;
   let queueSignature = null;
+  let prepareSignature = null;
 
   async function refreshQueue() {
     const seq = ++queueSeq;
@@ -801,6 +945,14 @@
     if (signature !== queueSignature) {
       queueSignature = signature;
       renderQueue(jobs);
+    }
+    // A conversion that started, finished or failed changes what the pickers
+    // should say; the catalog is re-read only on such a transition.
+    const preparing = JSON.stringify(jobs.filter(job => job.kind === "prepare").map(job => [job.id, job.status]));
+    if (preparing !== prepareSignature) {
+      const first = prepareSignature === null;
+      prepareSignature = preparing;
+      if (!first) loadModels();
     }
     // A retried or background job saves its transcript without the detail
     // panel's poll loop ever seeing it, so the history list has to be told.
@@ -1046,7 +1198,186 @@
 
   // ── Dictation settings ────────────────────────────────────────────────
   const HOTKEY_LABELS = {};
-  const MODEL_LABELS = { "1.7b": "1.7B — accuracy", "0.6b": "0.6B — speed" };
+
+  // ── Model catalog ─────────────────────────────────────────────────────
+  // What the server can transcribe with: the two upstream models, and the
+  // quantized variants it makes on this Mac once asked to. Both pickers are
+  // built from it. The page itself says something only when the chosen model
+  // cannot be used yet; the whole catalog, with its actions, lives in
+  // Settings → Models.
+  let catalog = [];
+  let catalogDefault = "1.7b";
+  const catalogEntry = id => catalog.find(item => item.id === id);
+  // Only the transient state earns a suffix in the option text; what an
+  // unprepared model needs is said in full by the warning under the picker.
+  const STATE_SUFFIX = { converting: " · preparing…" };
+  const PILLS = {
+    ready: ["ready", "ready"],
+    converting: ["preparing…", "working"],
+    needs_conversion: ["not prepared", ""],
+    downloadable: ["downloads on first use", ""],
+  };
+
+  function modelLabel(id) {
+    const item = catalogEntry(id);
+    return item ? `${item.label} — ${item.note}${STATE_SUFFIX[item.state] || ""}` : id;
+  }
+
+  function fillModelPicker(sel, ids, preferred) {
+    const current = sel.value;
+    sel.replaceChildren();
+    for (const id of ids) {
+      const o = document.createElement("option");
+      o.value = id;
+      o.textContent = modelLabel(id);
+      sel.appendChild(o);
+    }
+    sel.value = ids.includes(current) ? current : (ids.includes(preferred) ? preferred : ids[0] || "");
+  }
+
+  function prepareButton(item, label = "Prepare") {
+    return queueButton(label, false, async () => {
+      await act(`/api/models/${item.id}/prepare`);
+      await loadModels();
+    });
+  }
+
+  function removeButton(item) {
+    return queueButton("Remove", true, async () => {
+      let message = "";
+      try {
+        const res = await fetch(`/api/models/${item.id}`, { method: "DELETE" });
+        if (!res.ok) message = (await res.json().catch(() => ({}))).detail || `Request failed (${res.status})`;
+      } catch { message = "Server unreachable. Is server.py still running?"; }
+      $("queueError").textContent = message;
+      await loadModels();
+    });
+  }
+
+  // On the page: nothing at all unless the chosen model needs something done
+  // before it can transcribe. A warning that is always visible is wallpaper.
+  function renderPickerWarning() {
+    const note = $("modelNote");
+    const item = catalogEntry($("model").value);
+    note.replaceChildren();
+    if (!item || (item.state !== "needs_conversion" && item.state !== "converting")) {
+      note.hidden = true;
+      return;
+    }
+    if (item.state === "converting") {
+      note.append(document.createTextNode(
+        `${item.label} is being prepared — the queue below shows how far along it is.`));
+    } else {
+      const base = catalogEntry(item.base);
+      note.append(document.createTextNode(
+        `${item.label} is not prepared yet. It is made here from the ` +
+        `${base ? base.label : "upstream"} weights, a few minutes once.`));
+      note.append(prepareButton(item));
+    }
+    note.hidden = false;
+  }
+
+  // In the sheet, under the dictation model picker: the same choice, in a
+  // place where the fuller explanation belongs.
+  function renderModelNote(sel, note) {
+    const item = catalogEntry(sel.value);
+    note.replaceChildren();
+    note.classList.remove("attention");
+    if (!item) { note.hidden = true; return; }
+    if (item.state === "needs_conversion") {
+      const base = catalogEntry(item.base);
+      const download = base && base.state === "downloadable"
+        ? ` The ${base.label} weights are downloaded first.` : "";
+      note.append(document.createTextNode(
+        `Not prepared yet: made on this Mac from the ${base ? base.label : "upstream"} weights, ` +
+        `a few minutes once, about ${item.memory_gb} GB in memory.${download}`));
+      note.classList.add("attention");
+      note.append(prepareButton(item));
+    } else if (item.state === "converting") {
+      note.append(document.createTextNode("Being prepared now; progress is in the queue on the page."));
+    } else if (item.bits) {
+      note.append(document.createTextNode(
+        `Prepared · ${item.bits}-bit${item.disk_gb != null ? " · " + item.disk_gb + " GB on disk" : ""}`));
+    } else {
+      note.append(document.createTextNode(
+        item.state === "downloadable"
+          ? `Downloaded from Hugging Face on first use · about ${item.memory_gb} GB in memory.`
+          : `Downloaded · about ${item.memory_gb} GB in memory.`));
+    }
+    note.hidden = false;
+  }
+
+  function pill(text, kind) {
+    const span = document.createElement("span");
+    span.className = kind ? `pill ${kind}` : "pill";
+    span.textContent = text;
+    return span;
+  }
+
+  // Settings → Models: every entry, what state it is in, and its one action.
+  function renderModelList() {
+    const list = $("modelList");
+    list.replaceChildren();
+    for (const item of catalog) {
+      const row = document.createElement("div");
+      row.className = "model-row";
+
+      const main = document.createElement("div");
+      main.className = "model-main";
+      const name = document.createElement("div");
+      name.className = "model-name";
+      name.append(document.createTextNode(`${item.label} — ${item.note}`));
+      const [label, kind] = PILLS[item.state] || [item.state, ""];
+      // A model that is loaded has plainly been downloaded, so saying it
+      // downloads on first use next to "in memory" only reads as a mistake.
+      if (!(item.loaded && item.state === "downloadable")) name.append(pill(label, kind));
+      if (item.loaded) name.append(pill("in memory", "loaded"));
+      main.append(name);
+
+      const meta = document.createElement("div");
+      meta.className = "model-meta";
+      const facts = [`about ${item.memory_gb} GB in memory`];
+      if (item.bits) {
+        facts.push(`${item.bits}-bit, group size ${item.group_size}`);
+        if (item.disk_gb != null) facts.push(`${item.disk_gb} GB on disk`);
+      } else {
+        facts.push("from Hugging Face");
+      }
+      meta.textContent = facts.join(" · ");
+      main.append(meta);
+      row.append(main);
+
+      if (item.state === "needs_conversion") row.append(prepareButton(item));
+      else if (item.state === "ready" && item.bits) row.append(removeButton(item));
+      list.append(row);
+    }
+    $("modelListNote").textContent = catalog.some(item => item.bits && item.state === "ready")
+      ? "Prepared models are stored in ~/Library/Application Support/Qwen Scribe/models."
+      : "";
+  }
+
+  function renderCatalogViews() {
+    renderPickerWarning();
+    renderModelNote($("setModel"), $("setModelNote"));
+    renderModelList();
+  }
+
+  async function loadModels() {
+    let body;
+    try {
+      const res = await fetch("/api/models");
+      if (!res.ok) return;
+      body = await res.json();
+    } catch { return; }
+    catalog = Array.isArray(body.models) ? body.models : [];
+    catalogDefault = body.default || catalogDefault;
+    const ids = catalog.map(item => item.id);
+    fillModelPicker($("model"), ids, catalogDefault);
+    fillModelPicker($("setModel"), ids, catalogDefault);
+    renderCatalogViews();
+  }
+  $("model").addEventListener("change", renderPickerWarning);
+  $("setModel").addEventListener("change", () => renderModelNote($("setModel"), $("setModelNote")));
 
   // The one-line instruction on the card follows the mode, so it never tells
   // someone to hold a key the helper is waiting for them to tap.
@@ -1083,14 +1414,18 @@
         o.value = typeof item === "object" ? item.id : item;
         o.textContent = typeof item === "object" ? item.label
           : item === "auto" ? "Auto-detect"
-          : MODEL_LABELS[item] || item;
+          : item;
         sel.appendChild(o);
       }
       sel.value = value;
     };
     for (const h of body.options.hotkeys) HOTKEY_LABELS[h.id] = h.label;
     fill($("setHotkey"), body.options.hotkeys, body.dictation.hotkey);
-    fill($("setModel"), body.options.models, body.dictation.model);
+    // The catalog carries the labels and states; the ids from the settings
+    // response are the fallback when it could not be read.
+    await loadModels();
+    if ($("setModel").options.length === 0) fill($("setModel"), body.options.models, body.dictation.model);
+    $("setModel").value = body.dictation.model;
     fill($("setLanguage"), body.options.languages, body.dictation.language);
     fill($("setMode"), body.options.modes, body.dictation.mode);
     $("setMaxSeconds").value = String(body.dictation.max_seconds);
@@ -1115,11 +1450,12 @@
     $("setUnload").value = unload;
     $("setPreload").checked = body.performance.preload_dictation_model !== false;
     $("dictationKey").textContent = HOTKEY_LABELS[body.dictation.hotkey] || "Right ⌘";
-    // The settings themselves stay folded away; only the way in appears, and
-    // only once there is something behind it to show.
+    // The way into the dictation settings appears only once there is
+    // something behind it to show.
     $("btnDictationSetup").hidden = false;
     await configReady.catch(() => {});
     applyTranscriptionSettings(body.transcription);
+    renderCatalogViews();
   }
 
   // ── Transcription options (persisted server-side, like the dictation ones,
@@ -1134,9 +1470,9 @@
     // is about to replace.
     if (contextSaveTimer === null) $("context").value = stored.context;
     $("oneSentencePerLine").checked = stored.sentence_per_line;
-    // Never leave a setting that is doing something hidden behind a summary
-    // the user has no reason to open.
-    if (stored.context) $("moreOptions").open = true;
+    // Never leave a setting that is doing something hidden behind a panel the
+    // user has no reason to open: it is named on the page instead.
+    renderChips();
     // Called directly rather than by dispatching "change", which would also
     // fire the save listener and write the settings straight back on load.
     // The redraw that listener would have triggered still has to happen.
@@ -1166,6 +1502,7 @@
     $("oneSentencePerLine").addEventListener("change", () =>
       saveTranscription({ sentence_per_line: $("oneSentencePerLine").checked }));
     $("context").addEventListener("input", () => {
+      renderChips();
       clearTimeout(contextSaveTimer);   // one write per pause, not per keystroke
       contextSaveTimer = setTimeout(() => {
         contextSaveTimer = null;
@@ -1356,12 +1693,8 @@
     }
   });
 
-  $("btnDictationSetup").addEventListener("click", () => {
-    const open = $("dictationSettings").hidden;
-    $("dictationSettings").hidden = !open;
-    $("btnDictationSetup").setAttribute("aria-expanded", String(open));
-    $("btnDictationSetup").textContent = open ? "Done" : "Set up";
-  });
+  $("btnDictationSetup").addEventListener("click", () =>
+    openSettings("dictation", $("btnDictationSetup")));
 
   // Named for the permission macOS is actually withholding, so the sentence
   // below can say what to grant rather than listing all three every time.
@@ -1422,6 +1755,91 @@
       status.classList.remove("needs-permission");
       $("dictationPermissions").hidden = true;
     }
+  }
+
+  // ── Settings sheet ────────────────────────────────────────────────────
+  // Everything that is not the two choices people change often lives here,
+  // in four groups, one visible at a time. The page stays a drop zone.
+  const sheet = $("settings");
+  const backdrop = $("settingsBackdrop");
+  const tabs = [...$("settingsTabs").querySelectorAll(".tab")];
+  let returnFocusTo = null;
+
+  function showGroup(group) {
+    for (const tab of tabs) {
+      const chosen = tab.dataset.group === group;
+      tab.setAttribute("aria-selected", String(chosen));
+      $(tab.getAttribute("aria-controls")).hidden = !chosen;
+    }
+    sheet.querySelector(".sheet-body").scrollTop = 0;
+  }
+
+  // The opener is passed in rather than read from document.activeElement:
+  // Safari, following the platform, does not focus a button when it is
+  // clicked, so on a Mac there would be nothing to hand focus back to.
+  function openSettings(group = "transcription", opener = null) {
+    if (sheet.hidden) returnFocusTo = opener || document.activeElement;
+    showGroup(group);
+    backdrop.hidden = false;
+    sheet.hidden = false;
+    document.body.style.overflow = "hidden";
+    $("btnSettings").setAttribute("aria-expanded", "true");
+    (tabs.find(tab => tab.dataset.group === group) || $("btnSettingsClose")).focus();
+  }
+
+  function closeSettings() {
+    if (sheet.hidden) return;
+    sheet.hidden = true;
+    backdrop.hidden = true;
+    document.body.style.overflow = "";
+    $("btnSettings").setAttribute("aria-expanded", "false");
+    // Back to whatever opened it — the gear, a chip, or the dictation card —
+    // and to the gear when that is gone, as a chip is once its setting is
+    // cleared. Never nowhere: the next Tab should start where the panel was.
+    const back = returnFocusTo && returnFocusTo.isConnected && returnFocusTo !== document.body
+      ? returnFocusTo : $("btnSettings");
+    back.focus();
+    returnFocusTo = null;
+  }
+
+  $("btnSettings").addEventListener("click", () =>
+    sheet.hidden ? openSettings("transcription", $("btnSettings")) : closeSettings());
+  $("btnSettingsClose").addEventListener("click", closeSettings);
+  backdrop.addEventListener("click", closeSettings);
+  for (const tab of tabs) tab.addEventListener("click", () => showGroup(tab.dataset.group));
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && !sheet.hidden) return closeSettings();
+    // aria-modal promises the rest of the page is unreachable; keep that true
+    // for the keyboard rather than only for the mouse.
+    if (event.key !== "Tab" || sheet.hidden) return;
+    const stops = [...sheet.querySelectorAll("button, select, textarea, input, [href]")]
+      .filter(node => !node.disabled && node.offsetParent !== null);
+    if (!stops.length) return;
+    const edge = event.shiftKey ? stops[0] : stops[stops.length - 1];
+    if (document.activeElement === edge || !sheet.contains(document.activeElement)) {
+      event.preventDefault();
+      (event.shiftKey ? stops[stops.length - 1] : stops[0]).focus();
+    }
+  });
+
+  // A setting that is quietly changing every transcript is named on the page,
+  // next to the files it applies to, and opens where it can be changed.
+  function renderChips() {
+    const chips = $("activeChips");
+    chips.replaceChildren();
+    const terms = ($("context").value || "").trim().split(/\s+/).filter(Boolean);
+    if (terms.length) {
+      const chip = document.createElement("button");
+      chip.className = "chip";
+      chip.type = "button";
+      chip.append(document.createTextNode("Vocabulary hint: "));
+      const count = document.createElement("b");
+      count.textContent = `${terms.length} ${terms.length === 1 ? "term" : "terms"}`;
+      chip.append(count);
+      chip.addEventListener("click", () => openSettings("transcription", chip));
+      chips.append(chip);
+    }
+    chips.hidden = chips.children.length === 0;
   }
 
   loadSettings();

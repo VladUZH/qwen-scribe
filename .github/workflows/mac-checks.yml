@@ -7,6 +7,13 @@ name: Mac checks
 # transcribe speech synthesised by macOS in three languages through the real
 # model with word timestamps, the Korean and Japanese aligner included.
 #
+# A second job goes deeper on the parts nothing else can reach: MLX quantizing
+# the real weights into a model the app then transcribes with, the numbers that
+# comparison produces, and the real page driven in WebKit — Safari's engine —
+# and Chromium against that same server. It is the closest thing to sitting at
+# the Mac that CI can be, and it is why both jobs exist: the first is the quick
+# release check, this one is the thorough one.
+#
 # The runner cannot grant Microphone, Input Monitoring or Accessibility, so
 # recording, the push-to-talk keys, and pasting remain hands-on checks.
 
@@ -82,9 +89,10 @@ jobs:
 
       - name: Transcribe synthesised speech through the real model
         env:
-          # The runner's virtual GPU occasionally times out a Metal command
-          # buffer and the server then ignores every later one. The checks
-          # stop and relaunch the server the way the apps do and retry once.
+          # The runner's virtual GPU is slow and the first decode in a process
+          # can trip the Metal watchdog; the checks warm it with a two-word
+          # clip first. A timeout on a real sample after that stops and
+          # relaunches the server the way the apps do and retries once.
           QS_NO_OPEN: "1"
           RESTART: >-
             "dist/Stop Qwen Scribe.app/Contents/MacOS/StopQwenScribe";
@@ -104,4 +112,112 @@ jobs:
         with:
           name: mac-checks-${{ github.run_number }}
           path: artifacts
+          if-no-files-found: warn
+
+  real-models:
+    name: Real conversion and the real page on the macOS runner
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      # The version the browser suite is written against; pinned here rather
+      # than in a package.json, so the repository itself stays free of a
+      # JavaScript dependency it does not ship.
+      PLAYWRIGHT_VERSION: "1.56.1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Cache the model weights
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-hub-qwen3-asr-0.6b-v1
+
+      - name: Cache the wheels the launcher installs
+        uses: actions/cache@v6
+        with:
+          path: ~/Library/Caches/pip
+          key: launcher-pip-${{ hashFiles('requirements-lock.txt') }}
+
+      - name: Build the app
+        run: make app
+
+      - name: Keep the run to one model
+        run: |
+          mkdir -p "$HOME/Library/Application Support/Qwen Scribe"
+          cat > "$HOME/Library/Application Support/Qwen Scribe/settings.json" <<'EOF'
+          {"dictation": {"model": "0.6b"}, "performance": {"preload_dictation_model": false}}
+          EOF
+
+      - name: Start the server through the app's launcher
+        env:
+          QS_NO_OPEN: "1"
+        run: bash "dist/Qwen Scribe.app/Contents/Resources/launch-server.sh"
+
+      - name: Convert a model for real, transcribe with it, compare, remove it
+        env:
+          RESTART: >-
+            "dist/Stop Qwen Scribe.app/Contents/MacOS/StopQwenScribe";
+            bash "dist/Qwen Scribe.app/Contents/Resources/launch-server.sh"
+        run: |
+          QS_NO_OPEN=1 python scripts/mac_real_models.py \
+            --out artifacts-models --variant 0.6b-4bit --restart-command "$RESTART"
+
+      - name: Install the browsers the page is checked in
+        # Into the workspace, not a temp directory: an ES module resolves a
+        # bare import by walking up from its own file, and ignores NODE_PATH.
+        # Nothing is saved to the repository — there is no package.json to
+        # write to, and node_modules is ignored.
+        run: |
+          npm install --no-save --no-package-lock --silent "playwright@$PLAYWRIGHT_VERSION"
+          npx playwright install webkit chromium
+
+      - name: Drive the real page in WebKit, the engine Safari uses
+        run: |
+          mkdir -p shots
+          node tests/browser/page.mjs --browser webkit --shots shots \
+            --wav artifacts-models/audio/english.wav
+
+      - name: Drive the real page in Chromium
+        run: |
+          node tests/browser/page.mjs --browser chromium --shots shots \
+            --wav artifacts-models/audio/english.wav
+
+      - name: Print the page as base64, so the result can be reviewed from the log
+        if: always()
+        # A convenience for reading the run; never the reason a run fails.
+        continue-on-error: true
+        # The artifact needs a browser and an account to open; a small JPEG in
+        # the log can be read by whoever, or whatever, is reading the run.
+        run: |
+          for name in 01-page 02-settings 04-transcript; do
+            source="shots/webkit-$name.png"
+            [ -f "$source" ] || continue
+            sips -Z 620 -s format jpeg -s formatOptions 45 "$source" --out "/tmp/$name.jpg" >/dev/null
+            size=$(stat -f%z "/tmp/$name.jpg")
+            echo "IMAGE $name bytes=$size"
+            if [ "$size" -lt 90000 ]; then
+              openssl base64 -in "/tmp/$name.jpg" | sed "s|^|B64 $name |"
+              echo "END $name"
+            else
+              echo "SKIPPED $name: too large for the log"
+            fi
+          done
+
+      - name: Stop the server
+        if: always()
+        run: |
+          "dist/Stop Qwen Scribe.app/Contents/MacOS/StopQwenScribe" || true
+          cp "$HOME/Library/Logs/QwenScribe.log" artifacts-models/QwenScribe.log 2>/dev/null || true
+
+      - name: Upload the comparison, the transcripts and the page screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-models-${{ github.run_number }}
+          path: |
+            artifacts-models
+            shots
           if-no-files-found: warn
