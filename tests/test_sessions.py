@@ -15,6 +15,28 @@ from unittest import mock
 from qwen_scribe import config, sessions
 
 
+def install_fake_modules(test, fakes):
+    """Put fake modules in sys.modules and restore exactly those keys after.
+
+    Deliberately not mock.patch.dict on the whole of sys.modules: that
+    restores the dict wholesale on exit, which also evicts any real module
+    first imported during the test. On a Mac with MLX installed that once
+    evicted the mlx.core native extension, and re-importing a nanobind
+    extension aborts the interpreter.
+    """
+    previous = {name: sys.modules.get(name) for name in fakes}
+
+    def restore():
+        for name, module in previous.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+    test.addCleanup(restore)
+    sys.modules.update(fakes)
+
+
 class FakeSession:
     instances = 0
 
@@ -29,9 +51,7 @@ class SessionCacheTests(unittest.TestCase):
         self.addCleanup(sessions.drop_all)
         package = ModuleType("mlx_qwen3_asr")
         package.Session = FakeSession
-        patcher = mock.patch.dict(sys.modules, {"mlx_qwen3_asr": package})
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        install_fake_modules(self, {"mlx_qwen3_asr": package})
         FakeSession.instances = 0
 
     def test_sessions_are_cached_and_reused(self):
@@ -114,9 +134,7 @@ class DownloadTests(unittest.TestCase):
         utils = ModuleType("huggingface_hub.utils")
         utils.tqdm = Tqdm
         hub.utils = utils
-        patcher = mock.patch.dict(sys.modules, {"huggingface_hub": hub, "huggingface_hub.utils": utils})
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        install_fake_modules(self, {"huggingface_hub": hub, "huggingface_hub.utils": utils})
         return calls
 
     def test_progress_counts_the_bytes_the_library_would_fetch(self):

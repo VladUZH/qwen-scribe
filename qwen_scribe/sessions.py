@@ -11,6 +11,7 @@ from __future__ import annotations
 import fnmatch
 import gc
 import io
+import sys
 import threading
 import time
 from pathlib import Path
@@ -83,9 +84,14 @@ def _release_memory() -> None:
     # Dropping the Python objects is what frees the weights; the collector
     # makes it prompt, and MLX keeps a buffer cache of its own worth clearing.
     gc.collect()
+    # Only if MLX is already loaded: a session was created through it, so it
+    # is. Importing it here instead would load a native extension purely to
+    # clear an empty cache, and inside a test that swaps modules in and out
+    # of sys.modules a re-import of that extension aborts the interpreter.
+    mx = sys.modules.get("mlx.core")
+    if mx is None:
+        return
     try:
-        import mlx.core as mx
-
         mx.clear_cache()
     except Exception:
         pass
