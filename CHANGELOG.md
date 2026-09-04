@@ -62,6 +62,12 @@ and the macOS CI job installs and tests the real runtime.
   until quit. On an 8 GB Mac that had used both models, 4.6 GB stayed
   claimed all day. The interval is a setting, from ten minutes to four
   hours or never; the next use reloads the model in a few seconds
+- The pre-release Mac checks run on GitHub's Apple Silicon runner as a
+  workflow: it builds the app, starts the server through the app's own
+  launcher, and transcribes speech synthesised by macOS in English, Korean
+  and Japanese through the real 0.6B model with word timestamps. This build
+  passed all of them; recording, the push-to-talk keys and pasting still
+  need a person at a Mac, since a runner cannot grant those permissions
 
 ## [0.2.2-beta.1] - 2026-09-04
 

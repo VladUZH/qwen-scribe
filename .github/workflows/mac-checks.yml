@@ -63,8 +63,9 @@ jobs:
           done
 
       - name: Keep the run to one model
-        # The server loads the dictation model at start; with no cached weights
-        # that is the 3.4 GB 1.7B. The checks use the 0.6B throughout.
+        # The server loads the dictation model at start, which is the 1.7B by
+        # default. The checks use the 0.6B throughout, so the run downloads and
+        # caches one model (the 0.6B's weights are 3.3 GB on the Hub).
         run: |
           mkdir -p "$HOME/Library/Application Support/Qwen Scribe"
           cat > "$HOME/Library/Application Support/Qwen Scribe/settings.json" <<'EOF'
