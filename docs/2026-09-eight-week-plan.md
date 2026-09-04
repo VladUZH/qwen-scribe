@@ -394,8 +394,8 @@ project and fatal to the people who download it.
       16 kHz mono 16-bit PCM. The launcher exports the helper's path as
       `QWEN_SCRIBE_DECODER`; the server uses it for every format AVFoundation
       handles (mp3, m4a, aac, mp4, mov, m4v, aiff, flac, qta) and falls back
-      to ffmpeg only for mkv, webm, ogg, opus, and wma. The "ffmpeg missing"
-      messages shrink to those five formats. Tests cover decoder selection
+      to ffmpeg only for avi, mkv, webm, ogg, opus, and wma. The "ffmpeg
+      missing" messages shrink to those six formats. Tests cover decoder selection
       by suffix and the error path when neither decoder exists. The third
       CI run showed the cost of a helper no Linux check can compile: the
       sample-buffer functions are CoreMedia's, the link line named every
@@ -461,6 +461,13 @@ works", plus the release.
       "For developers" line. Refresh `docs/assets` screenshots to the
       current interface, including the Open Anyway prompt. Add an "Install
       matrix" section to `RELEASING.md`.
+- [ ] `fix/cjk-word-count`: the WebKit screenshots from week 6 show a
+      Japanese transcript listed as "1 words" — `history.py` and the page
+      both count `text.split()`, which is one run of characters for a
+      language that does not space its words. `compare_models.words()`
+      already splits CJK per character; the counter should use the same
+      rule, and the label should not say "1 words". Stored counts stay as
+      they are until a transcript is saved again.
 - [ ] `release/v0.4.0-beta.1`: changelog, version bump, roadmap ticks
       (self-contained runtime and quantized models are new roadmap lines and
       are recorded as shipped).

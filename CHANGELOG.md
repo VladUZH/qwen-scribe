@@ -18,12 +18,12 @@ details when clearly documented.
   removed from the runtime, nothing else is, and the standard library is
   compiled at build time so that no launch ever writes into the signed app
 
-- The app decodes media itself, so ffmpeg is needed only for Matroska, WebM,
-  Ogg, Opus and WMA. The helper gained `--decode`, which turns anything
+- The app decodes media itself, so ffmpeg is needed only for AVI, Matroska,
+  WebM, Ogg, Opus and WMA. The helper gained `--decode`, which turns anything
   AVFoundation reads into the 16 kHz mono the model wants; a WAV already in
   that form is read by the server directly, with nothing but Python's own
   `wave` module. A file the helper cannot read still falls back to ffmpeg,
-  and the page's warning now names the five formats rather than implying
+  and the page's warning now names the six formats rather than implying
   nothing works
 
 ### Changed
