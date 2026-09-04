@@ -43,4 +43,4 @@ threadpoolctl==3.6.0
 tqdm==4.70.0
 typing-extensions==4.16.0
 typing-inspection==0.4.4
-uvicorn==0.52.1
+uvicorn==0.52.4
