@@ -82,7 +82,7 @@ picker can prepare on your Mac need about 1.9 GB and 0.5 GB
 repository; the first use downloads them, with the progress shown on the
 job. A loaded model is released after 20 minutes without a job,
 and the dictation model is loaded when the app starts so the first dictation is
-quick. Both are settings behind **Set up** on the dictation card.
+quick. Both are in **Settings → Advanced**, behind the gear in the corner.
 
 Word timestamps for Japanese and Korean use the `nagisa` and `soynlp`
 tokenizers from the upstream `aligner` extra. The runtime lock has included
@@ -142,8 +142,8 @@ browser tab open at all.
 | --- | --- |
 | Maximum file size | **4 GB.** The upload is staged in a temporary folder before decoding, so one job briefly needs twice the file's size in free disk space. This is not a model limit — for a longer video, extract the audio track first: `ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 output.wav` |
 | Concurrency | One file at a time. Drop several files at once, or more while one is running, and they queue in order; the Queue list shows that order, and each entry can be cancelled, a failed one retried without re-uploading. Cancelling a waiting file is immediate; cancelling the one being transcribed takes effect when the current 30-second chunk finishes, since a model call cannot be interrupted part-way |
-| Vocabulary hints | Up to 2000 characters, under **More options**. The hint is added to every chunk's prompt, so it is paid for once per chunk of the file |
-| Dictation settings | The push-to-talk key, mode, longest recording, model, language, dictionary, and history choice live behind **Set up** on the dictation card, and apply within about ten seconds. In **Hold to talk** the key records while held; in **Press to start, press to stop** a tap starts and the next tap stops, while a press held longer than a tap still works as hold. A recording is stopped on its own at the configured limit, two minutes by default and ten at most. The dictionary is names and terms you dictate often; it is sent with every dictation as the model's vocabulary hint. Switch off **Save dictations to history** to keep dictations out of the saved transcripts entirely. Say "new line" or "new paragraph" on its own, between sentences, to get a break; **Replacements** turn a phrase you say into the text you want pasted, whole words only, so "my email" can become your address. These are separate from the model, language, and vocabulary used for file transcription |
+| Vocabulary hints | Up to 2000 characters, in **Settings → Transcription**. The hint is added to every chunk's prompt, so it is paid for once per chunk of the file. While one is set, the page says so above the dictation card, and that label opens the field |
+| Dictation settings | The push-to-talk key, mode, longest recording, model, language, dictionary, and history choice live in **Settings → Dictation** — the gear in the corner, or **Set up** on the dictation card — and apply within about ten seconds. In **Hold to talk** the key records while held; in **Press to start, press to stop** a tap starts and the next tap stops, while a press held longer than a tap still works as hold. A recording is stopped on its own at the configured limit, two minutes by default and ten at most. The dictionary is names and terms you dictate often; it is sent with every dictation as the model's vocabulary hint. Switch off **Save dictations to history** to keep dictations out of the saved transcripts entirely. Say "new line" or "new paragraph" on its own, between sentences, to get a break; **Replacements** turn a phrase you say into the text you want pasted, whole words only, so "my email" can become your address. These are separate from the model, language, and vocabulary used for file transcription |
 | Languages | Automatic detection, or any of the fourteen Qwen3-ASR supports. Word timestamps for Japanese and Korean use the tokenizers shipped in `requirements-lock.txt`; if the aligner cannot run, the transcript is still produced and saved, without the `.srt` |
 
 ## Desktop dictation permissions
@@ -222,8 +222,10 @@ is intentionally a separate release-owner step.
 
 The model picker offers **1.7B 8-bit** and **0.6B 4-bit** next to the two
 upstream models. Either is made on your Mac from the upstream weights when
-you press **Prepare** under the picker, a few minutes once, and is stored
-under `~/Library/Application Support/Qwen Scribe/models`.
+you press **Prepare** — in **Settings → Models**, which lists every model
+with its state, or on the page itself when you pick one that is not ready —
+a few minutes once, and is stored under
+`~/Library/Application Support/Qwen Scribe/models`.
 [docs/models.md](docs/models.md) says what to expect from each. From a
 terminal the same conversion is `python quantize_8bit.py [1.7b-8bit|0.6b-4bit]`,
 and `python compare_models.py recording.m4a` measures speed and word

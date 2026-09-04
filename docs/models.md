@@ -38,9 +38,12 @@ until then the upstream figures are the published expectation.
 
 ## Preparing a variant
 
-Choose it in either model picker. The note under the picker says what it
-needs; **Prepare** queues the conversion in the same queue as transcriptions,
-so it waits for a running file and never competes with it for the GPU. The
+Open **Settings → Models** — the gear in the corner. Every entry is listed
+with its state, what it costs in memory and on disk, and its one action;
+**Prepare** queues the conversion in the same queue as transcriptions, so it
+waits for a running file and never competes with it for the GPU. Picking an
+unprepared variant in the model picker on the page offers the same button
+there, since that is where you find out you need it. The
 steps are visible in the queue: the upstream weights are downloaded first if
 they are not in the cache, the fp16 model is loaded, quantized and saved,
 and the entry becomes ready. Any loaded model is released before the
@@ -48,8 +51,9 @@ conversion starts, since it holds a full fp16 copy while it works; the next
 job reloads what it needs in a few seconds. Cancelling leaves nothing behind.
 
 A prepared variant lives in `~/Library/Application Support/Qwen Scribe/models`
-(or `QWEN_SCRIBE_MODEL_DIR`) and survives app upgrades. **Remove** under the
-picker deletes it again; preparing it once more takes the same few minutes.
+(or `QWEN_SCRIBE_MODEL_DIR`) and survives app upgrades. **Remove**, next to it
+in **Settings → Models**, deletes it again; preparing it once more takes the
+same few minutes.
 
 From a terminal, `python quantize_8bit.py [1.7b-8bit|0.6b-4bit]` does the
 same conversion into the same place. A conversion made by an older version

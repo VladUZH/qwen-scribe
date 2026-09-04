@@ -6,6 +6,25 @@ details when clearly documented.
 
 ## [Unreleased]
 
+### Changed
+
+- The page is a drop zone again. It had grown to hold every control at once:
+  three transcription options, twelve dictation and performance settings, and
+  a note under each of two model pickers, all on screen together. What stays
+  is the drop zone, the model and language, the timestamp toggle, and the
+  one-line dictation card. Everything else moved behind the gear in the
+  corner, into a **Settings** panel with four groups — Transcription,
+  Dictation, Models, Advanced — one visible at a time. **Set up** on the
+  dictation card opens the panel at its own group, and Escape, the close
+  button, or a click on the page closes it
+- A setting that is quietly changing every transcript is named on the page
+  rather than left behind a panel: while a vocabulary hint is set, a label
+  above the dictation card says how many terms it holds and opens the field
+- The page says something about the model only when the chosen one cannot be
+  used yet: one line naming what it needs and the button that does it. The
+  whole catalog, with each entry's state, memory, size on disk and its one
+  action, is in **Settings → Models**
+
 ### Added
 
 - Quantized models in the picker: **1.7B 8-bit** (fastest accurate) and
