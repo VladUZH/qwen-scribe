@@ -73,10 +73,14 @@ transcript text stay on the Mac.
   [requirements-lock.txt](requirements-lock.txt). If you do have a suitable
   Python and prefer it, a build made with `BUNDLE_PYTHON=0 make app` uses it
   instead.
-- `ffmpeg` for non-WAV audio and video — Homebrew (`brew install ffmpeg`) or
-  MacPorts (`sudo port install ffmpeg`). The Mac app looks on the standard
-  Homebrew and MacPorts paths and then on your login shell's `PATH`, so any
-  install your terminal can see should work.
+- `ffmpeg` only for Matroska, WebM, Ogg, Opus and WMA. Everything else —
+  mp3, m4a, aac, aiff, flac, mp4, mov, m4v, Voice Memos — the app decodes
+  itself through AVFoundation, so a Mac with no Homebrew transcribes it. For
+  those five, install ffmpeg with Homebrew (`brew install ffmpeg`) or
+  MacPorts (`sudo port install ffmpeg`); the app looks on the standard
+  Homebrew and MacPorts paths and then on your login shell's `PATH`. Running
+  from source with `./run.sh` has no helper, so there ffmpeg still covers
+  every non-WAV file.
 - Apple Command Line Tools to build the app from source:
   `xcode-select --install`
 

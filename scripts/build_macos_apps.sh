@@ -66,10 +66,21 @@ clang -fobjc-arc -arch arm64 -mmacosx-version-min=14.0 -Wall -Wextra \
   -framework AudioToolbox -framework IOKit -framework ServiceManagement \
   "$ROOT/native/DictationHelper.m" -o "$APP/Contents/MacOS/QwenScribe"
 
+# Before signing, and never after: running the interpreter is what would
+# write bytecode into the bundle and invalidate the signature that seals it.
+# The runtime is precompiled by bundle_python.sh for the same reason.
+RUNTIME="$APP/Contents/Resources/Python"
+if [[ -x "$RUNTIME/bin/python3" ]]; then
+  PYTHONDONTWRITEBYTECODE=1 "$RUNTIME/bin/python3" - <<'PYCHECK'
+import sqlite3, ssl, sys, venv    # noqa: F401  (imported to prove they load)
+assert sys.version_info[:2] == (3, 12), sys.version
+PYCHECK
+  echo "Bundled interpreter runs: $(PYTHONDONTWRITEBYTECODE=1 "$RUNTIME/bin/python3" -V)"
+fi
+
 # Nested code is signed before the bundle that seals it: macOS reports an app
 # whose inner Mach-O files are unsigned, or signed with another identity, as
 # damaged rather than as a signing mistake.
-RUNTIME="$APP/Contents/Resources/Python"
 if [[ -d "$RUNTIME" ]]; then
   RUNTIME_BINARIES=()
   while IFS= read -r -d '' candidate; do
@@ -130,17 +141,6 @@ fi
 
 codesign --verify --deep --strict "$APP"
 codesign --verify --strict "$STOP_APP"
-
-# The runtime has to survive being signed and sealed: an interpreter that
-# cannot import ssl or sqlite3 makes the private environment fail on first
-# launch, on someone else's Mac, with a dialog instead of an app.
-if [[ -x "$APP/Contents/Resources/Python/bin/python3" ]]; then
-  "$APP/Contents/Resources/Python/bin/python3" - <<'PYCHECK'
-import sqlite3, ssl, sys, venv    # noqa: F401  (imported to prove they load)
-assert sys.version_info[:2] == (3, 12), sys.version
-PYCHECK
-  echo "Bundled interpreter runs: $("$APP/Contents/Resources/Python/bin/python3" -V)"
-fi
 
 MAIN_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
 if [[ "$MAIN_EXECUTABLE" != "QwenScribe" ]] || ! file "$APP/Contents/MacOS/$MAIN_EXECUTABLE" | grep -q 'Mach-O 64-bit executable arm64'; then

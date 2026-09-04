@@ -717,7 +717,11 @@
       $("file").accept = cfg.extensions.join(",");
     }
     if (!cfg.ffmpeg) {
-      $("runtime").textContent = "ffmpeg missing — install it with Homebrew or MacPorts";
+      // With the app's own decoder there are five formats left that need
+      // ffmpeg, and saying so is more use than a bare warning.
+      $("runtime").textContent = cfg.decoder
+        ? `${(cfg.ffmpeg_formats || []).join(", ")} need ffmpeg`
+        : "ffmpeg missing — install it with Homebrew or MacPorts";
       $("runtime").style.color = "var(--err)";
     }
     return true;

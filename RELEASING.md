@@ -53,7 +53,13 @@ on. `scripts/bundle_python.sh` holds the pin: a `python-build-standalone`
 `install_only` build for `aarch64-apple-darwin`, named by version and
 verified against a SHA-256 that is committed here. A mismatch stops the
 build. The archive is cached under `.build/cache`, and Tcl/Tk is removed
-from it; nothing else is. Expect the app to grow by roughly 25 MB
+from it; nothing else is. The standard library is then compiled with
+`--invalidation-mode unchecked-hash`, because the archive ships almost no
+bytecode and the first import would otherwise write `__pycache__` into the
+bundle: that invalidates the signature where the app is writable, and
+re-parses the standard library on every launch where it is not. The launcher
+also sets `PYTHONDONTWRITEBYTECODE` when it uses the bundled interpreter, so
+nothing writes there later. Expect the app to grow by roughly 30 MB
 compressed.
 
 It sits in `Resources` rather than `Frameworks` because codesign treats

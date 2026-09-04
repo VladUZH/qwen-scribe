@@ -205,6 +205,22 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
   /usr/bin/osascript -e 'display notification "ffmpeg is missing — WAV works, but other media needs it (brew install ffmpeg / sudo port install ffmpeg)" with title "Qwen Scribe"' 2>/dev/null
 fi
 
+# The helper is also the app's media decoder: with it, only Matroska, WebM,
+# Ogg, Opus and WMA still need ffmpeg, which is what makes a Mac with no
+# Homebrew able to transcribe an .m4a or an .mp4.
+HELPER="$(cd "$RESOURCES_DIR/../MacOS" 2>/dev/null && pwd)/QwenScribe"
+if [ -x "$HELPER" ]; then
+  export QWEN_SCRIBE_DECODER="$HELPER"
+fi
+
+# The standard library the server imports lives inside the app, and the app
+# is signed. Writing bytecode next to it would invalidate that signature on
+# any Mac where the bundle is writable; it is precompiled at build time, so
+# there is nothing to gain by writing more.
+if [ -x "$BUNDLED_PYTHON" ]; then
+  export PYTHONDONTWRITEBYTECODE=1
+fi
+
 cd "$RUNTIME_DIR" || fail_with_log "Cannot open Qwen Scribe's local runtime."
 nohup "$VENV_DIR/bin/python" "$RUNTIME_DIR/server.py" >> "$LOG" 2>&1 &
 echo $! > "$PIDFILE"

@@ -382,9 +382,14 @@ project and fatal to the people who download it.
       `com.apple.security.cs.disable-library-validation`, which a hardened
       interpreter needs to load pip-installed extension modules that Apple
       did not sign with our Team ID; `RELEASING.md` records that now so the
-      signed release does not rediscover it. Build size grows by roughly
-      30 MB compressed. `find_python` remains as the fallback for `./run.sh`.
-- [ ] `feat/avfoundation-decode`: the helper gains
+      signed release does not rediscover it. The standard library is
+      compiled at build time and the launcher sets
+      `PYTHONDONTWRITEBYTECODE`: the archive ships almost no bytecode, and
+      the second CI run showed the first import writing `__pycache__` into
+      the bundle and breaking the signature it had just verified. Build size
+      grows by roughly 30 MB compressed. `find_python` remains as the
+      fallback for `./run.sh`.
+- [x] `feat/avfoundation-decode`: the helper gains
       `--decode <input> <output.wav>` using `AVAssetReader` to produce
       16 kHz mono 16-bit PCM. The launcher exports the helper's path as
       `QWEN_SCRIBE_DECODER`; the server uses it for every format AVFoundation

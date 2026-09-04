@@ -79,4 +79,14 @@ if [[ ! -x "$DEST/bin/python3" ]]; then
   exit 1
 fi
 
-echo "Bundled Python $PYTHON_VERSION into ${DEST/#$ROOT\//} ($(du -sh "$DEST" | cut -f1))"
+# The archive ships almost no bytecode, and that matters twice over. The first
+# import would write __pycache__ directories throughout the bundle: where the
+# app is writable that invalidates its signature, and where it is not every
+# launch re-parses the standard library from source. Compiling here puts the
+# bytecode inside the signature instead. `unchecked-hash` tells Python to load
+# it without comparing timestamps, so nothing tempts it to write again after
+# the files have been copied, zipped, and copied once more.
+"$DEST/bin/python3" -m compileall -q -f -j 0 \
+  --invalidation-mode unchecked-hash "$DEST/lib/python3.12"
+
+echo "Bundled Python $PYTHON_VERSION into ${DEST/#$ROOT\//} ($(du -sh "$DEST" | cut -f1), $(find "$DEST" -name '*.pyc' | wc -l | tr -d ' ') compiled)"

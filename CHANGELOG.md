@@ -14,8 +14,17 @@ details when clearly documented.
   environment from that interpreter rather than hunting for one and failing
   with a dialog. Python is still needed to run from source, and
   `BUNDLE_PYTHON=0 make app` builds without the runtime for anyone who
-  prefers their own. The app grows by roughly 25 MB compressed; Tcl/Tk is
-  removed from the runtime, nothing else is
+  prefers their own. The app grows by roughly 30 MB compressed; Tcl/Tk is
+  removed from the runtime, nothing else is, and the standard library is
+  compiled at build time so that no launch ever writes into the signed app
+
+- The app decodes media itself, so ffmpeg is needed only for Matroska, WebM,
+  Ogg, Opus and WMA. The helper gained `--decode`, which turns anything
+  AVFoundation reads into the 16 kHz mono the model wants; a WAV already in
+  that form is read by the server directly, with nothing but Python's own
+  `wave` module. A file the helper cannot read still falls back to ffmpeg,
+  and the page's warning now names the five formats rather than implying
+  nothing works
 
 ### Changed
 
