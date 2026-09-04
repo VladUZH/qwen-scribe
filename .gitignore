@@ -4,6 +4,9 @@
 .vscode/
 *.swp
 
+# Node: only ever an ad-hoc install for the browser checks in tests/browser
+node_modules/
+
 # Python
 .venv/
 __pycache__/
