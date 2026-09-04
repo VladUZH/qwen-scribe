@@ -10,11 +10,12 @@ notarizes automatically once credentials exist; nothing has been signed yet.
 **What this cycle is for.** Three outcomes, in priority order:
 
 1. **Ship what exists and keep shipping.** Release `v0.2.2-beta.1` in week 1,
-   then a release every two to three weeks, each signed and notarized from
-   week 4 on.
+   then a release every two to three weeks, signed and notarized from the
+   first release after the Developer ID arrives (see the revision below).
 2. **Turn a developer beta into an app anyone can install.** No Homebrew, no
-   Python, no ffmpeg, no Gatekeeper hoop: a notarized `.app` that works after
-   a download, plus a Homebrew cask for the people who prefer it.
+   Python, no ffmpeg, and one Gatekeeper approval until the Developer ID
+   arrives, none after: an `.app` that works after a download, plus a
+   Homebrew cask for the people who prefer it.
 3. **Make dictation competitive.** Dictation is the surface people compare
    with VoiceInk, Superwhisper, and Wispr Flow. Qwen3-ASR's vocabulary hints
    are the model's edge and are currently switched off for dictation; a
@@ -24,20 +25,48 @@ notarizes automatically once credentials exist; nothing has been signed yet.
 Everything else, notably local LLM post-processing, streaming partial results,
 and diarization, is deferred with reasons in the last section.
 
+## Revision of 4 September: unsigned builds through this cycle
+
+The Apple Developer Program enrolment is applied for but not paid, and the
+owner is not ready to pay yet. Every release in this cycle is therefore
+ad-hoc signed and not notarized, as the four betas so far have been, and
+each install keeps the one-time **System Settings → Privacy & Security →
+Open Anyway** approval. The release pipeline already signs and notarizes
+the moment the six secrets from `RELEASING.md` exist, so nothing is lost
+by waiting; the first release after the enrolment clears is signed with no
+other change, and its notes tell users to re-grant the three permissions
+once, because signing changes the app's identity.
+
+What this changes below, with the affected items rewritten in place:
+
+- Week 2's certificate and secrets work moves to "when the enrolment
+  clears"; the dry run remains useful and is run against the ad-hoc build.
+- Week 6's bundled interpreter is ad-hoc signed inside-out like the rest of
+  the bundle. The gating check is no longer notarization but a Mac checks
+  run that starts the app with no other Python on the runner's `PATH`, plus
+  `codesign --verify --deep --strict` on the result. The hardened runtime
+  and the library-validation entitlement are not needed for an ad-hoc
+  build and are left for the signed release.
+- Week 7's Homebrew cask installs an unsigned app: the cask carries a
+  `caveats` block with the Open Anyway steps, and the README's install
+  steps make that approval step two of five rather than a footnote.
+- Acceptance criteria that said "notarized" now say "after the one-time
+  Open Anyway approval". The success list at the end is updated to match.
+
 ## Release calendar
 
 | Date | Release | Contents |
 | --- | --- | --- |
 | Fri 12 Sep | `v0.2.2-beta.1` | Everything already on `main`. Ad-hoc signed unless the Developer ID arrives early |
-| Fri 2 Oct | `v0.3.0-beta.1` | Dictation: dictionary, save-to-history opt-out, toggle mode, Fn key, spoken commands, replacements. Launch at login. Model warm-up, idle unload, download progress. First **signed and notarized** release |
-| Fri 23 Oct | `v0.4.0-beta.1` | Quantized models in-app. Bundled Python runtime. AVFoundation decoding without ffmpeg. Check for updates. Homebrew tap |
-| Fri 30 Oct | `v0.4.1-beta.1` | Local-path and batch ingest: Open With, drop on the Dock icon, Transcribe Files…, outputs beside the source. Fixes from the week-8 install matrix |
+| Fri 2 Oct | `v0.3.0-beta.1` | Dictation: dictionary, save-to-history opt-out, toggle mode, Fn key, spoken commands, replacements. Launch at login. Model warm-up, idle unload, download progress. **Shipped early on 4 Sep, ad-hoc signed** |
+| Fri 23 Oct | `v0.4.0-beta.1` | Quantized models in-app. Bundled Python runtime. AVFoundation decoding without ffmpeg. Check for updates. Homebrew tap. Ad-hoc signed unless the enrolment has cleared |
+| Fri 30 Oct | `v0.4.1-beta.1` | Local-path and batch ingest: Open With, drop on the Dock icon, Transcribe Files…, outputs beside the source. Fixes from the week-8 install matrix. Ad-hoc signed unless the enrolment has cleared |
 
 A release slips rather than ships broken. The definition of done for every
 release: `make check` green, `make app` verified on a Mac, the changelog
 section dated, README status line and the three version fields updated,
 the draft's archive installed on a Mac that did not build it, and the manual
-dictation check in `RELEASING.md` step 4 performed on the signed build.
+dictation check in `RELEASING.md` step 4 performed on that archive.
 
 ## Working agreement
 
@@ -147,17 +176,19 @@ safe, and make dependency updates resolve themselves.
 
 **Owner**
 
-- [ ] Create the Developer ID Application certificate and the App Store
-      Connect API key; add the six secrets from `RELEASING.md`.
-- [ ] Run the release dry run; install the resulting archive and perform the
-      microphone check from `RELEASING.md` step 4. A hardened-runtime build
-      that lost the audio-input entitlement records silence, and only this
-      test catches it.
+- [ ] When the enrolment clears, whichever week that is: create the
+      Developer ID Application certificate and the App Store Connect API
+      key; add the six secrets from `RELEASING.md`; run the release dry run
+      and install its archive, since a hardened-runtime build that lost the
+      audio-input entitlement records silence and only a hands-on check
+      catches it. Until then every release stays ad-hoc signed.
+- [ ] Run the release dry run on the ad-hoc build once and install its
+      archive; it is the same archive the Release workflow produces from a
+      tag, so this doubles as the pre-release install check.
 
 **Acceptance.** Package split merged with all tests green on both CI jobs;
 Node tests cover the sentence splitter and SRT builder; `uv.lock` drift check
-in place; a signed and notarized dry-run archive has been installed and
-dictates on a Mac.
+in place; a dry-run archive has been installed and dictates on a Mac.
 
 **Risk.** The hardened runtime is on for signed builds. If Gatekeeper or
 TCC behaves differently for the signed helper (permission re-grants are
@@ -208,7 +239,7 @@ works while a key is physically held, and stops after 120 seconds
 
 **Owner**
 
-- [ ] Manual test on the signed dry-run build: dictionary improves a name,
+- [ ] Manual test on the v0.3.0-beta.1 build: dictionary improves a name,
       toggle mode starts and stops with two taps, history opt-out leaves the
       list untouched, the first dictation after launch is fast, and a
       dictation after 25 idle minutes shows the loading HUD and then works.
@@ -335,14 +366,16 @@ project and fatal to the people who download it.
       pinned, SHA-256-verified `python-build-standalone` 3.12 `install_only`
       build for `aarch64-apple-darwin` into
       `Contents/Frameworks/Python`, signs every Mach-O inside it (the
-      interpreter, `libpython`, stdlib extension modules) with the hardened
-      runtime, and the launcher prefers that interpreter to create the venv
-      in Application Support as it does now. The entitlements file gains
+      interpreter, `libpython`, stdlib extension modules) inside-out with
+      the same identity as the rest of the bundle, ad-hoc until a Developer
+      ID exists, and the launcher prefers that interpreter to create the
+      venv in Application Support as it does now. For the later signed
+      build the entitlements file will need
       `com.apple.security.cs.disable-library-validation`, which a hardened
       interpreter needs to load pip-installed extension modules that Apple
-      did not sign with our Team ID; `RELEASING.md` explains why. Build size
-      grows by roughly 30 MB compressed. `find_python` remains as the
-      fallback for `./run.sh`.
+      did not sign with our Team ID; `RELEASING.md` records that now so the
+      signed release does not rediscover it. Build size grows by roughly
+      30 MB compressed. `find_python` remains as the fallback for `./run.sh`.
 - [ ] `feat/avfoundation-decode`: the helper gains
       `--decode <input> <output.wav>` using `AVAssetReader` to produce
       16 kHz mono 16-bit PCM. The launcher exports the helper's path as
@@ -351,27 +384,33 @@ project and fatal to the people who download it.
       to ffmpeg only for mkv, webm, ogg, opus, and wma. The "ffmpeg missing"
       messages shrink to those five formats. Tests cover decoder selection
       by suffix and the error path when neither decoder exists.
-- [ ] `ci/notarize-bundled-runtime`: the release dry run proves the bundled
-      interpreter passes notarization. This is the week's gating check and
-      runs on Monday, before the rest of the work depends on it.
+- [ ] `ci/bundled-runtime-check`: the Mac checks workflow gains a job that
+      starts the built app with every other Python removed from `PATH` and
+      Homebrew's directories hidden, proving the launcher creates the
+      environment from the bundled interpreter, and `codesign --verify
+      --deep --strict` passes on the result. This is the week's gating
+      check and runs on Monday, before the rest of the work depends on it.
+      Notarization of the bundled interpreter is checked by the release dry
+      run only once the enrolment has cleared.
 
 **Owner**
 
-- [ ] Run the dry run on Monday; if notarization rejects the bundled
-      interpreter, the log goes back the same day so the signing script can
-      be adjusted before Wednesday.
-- [ ] Install the resulting build on the Mac without Homebrew from week 1 and
-      transcribe an `.m4a` and an `.mp4` with ffmpeg absent.
+- [ ] Install the resulting build on the Mac without Homebrew from week 1:
+      confirm Open Anyway approves the bundle once, the app starts with the
+      bundled interpreter, and an `.m4a` and an `.mp4` transcribe with
+      ffmpeg absent.
 
 **Acceptance.** A Mac with no Homebrew, no Python, and no ffmpeg downloads
-the archive, opens the app, and transcribes an `.mp4`.
+the archive, approves it once under Open Anyway, opens the app, and
+transcribes an `.mp4`.
 
-**Risk.** Notarization of a Python runtime is the largest technical unknown
-in the plan. Mitigation: the Monday dry run, and a fallback in which the
-bundled interpreter ships unsigned inside a signed bundle only if Apple's
-tooling accepts it, otherwise the runtime download moves to first launch
-(pinned URL, verified hash, documented in `PRIVACY.md`) and the app remains
-notarizable.
+**Risk.** Gatekeeper's treatment of a large ad-hoc bundle with a nested
+runtime is the largest technical unknown left in the plan: the Open Anyway
+approval covers the whole bundle, but every nested Mach-O must carry a
+consistent signature or macOS reports the app as damaged. Mitigation: the
+Monday CI check verifies the deep signature, and the fallback is a runtime
+download on first launch (pinned URL, verified hash, documented in
+`PRIVACY.md`).
 
 ---
 
@@ -390,15 +429,20 @@ works", plus the release.
 - [ ] `dist/homebrew-tap`: a `Casks/qwen-scribe.rb` for a new
       `VladUZH/homebrew-tap` repository with `version`, `sha256`, both apps,
       a `zap` stanza listing the Application Support, Logs, and cache paths
-      from the README, and `livecheck` against GitHub releases. The release
-      workflow gains a final step that opens a pull request to the tap with
-      the new version and checksum.
+      from the README, `livecheck` against GitHub releases, and a `caveats`
+      block with the Open Anyway steps, since the cask installs an unsigned
+      app and the download still carries the quarantine attribute. People
+      who prefer to skip the prompt can pass `--no-quarantine` themselves;
+      the cask does not do it for them. The release workflow gains a final
+      step that opens a pull request to the tap with the new version and
+      checksum.
 - [ ] `docs/readme-for-users`: rewrite the README's top half for someone who
-      does not build software: download, open, grant three permissions, hold
-      the key. Move build-from-source, environment variables, and
-      architecture below a "For developers" line. Refresh `docs/assets`
-      screenshots to the current interface. Add an "Install matrix" section
-      to `RELEASING.md`.
+      does not build software, in five steps: download, approve once under
+      Open Anyway, open, grant three permissions, hold the key. Move
+      build-from-source, environment variables, and architecture below a
+      "For developers" line. Refresh `docs/assets` screenshots to the
+      current interface, including the Open Anyway prompt. Add an "Install
+      matrix" section to `RELEASING.md`.
 - [ ] `release/v0.4.0-beta.1`: changelog, version bump, roadmap ticks
       (self-contained runtime and quantized models are new roadmap lines and
       are recorded as shipped).
@@ -411,8 +455,9 @@ works", plus the release.
 - [ ] Create the `homebrew-tap` repository; tag `v0.4.0-beta.1` on Friday 23
       Oct; publish; merge the tap PR the workflow opens.
 
-**Acceptance.** `brew install --cask vladuzh/tap/qwen-scribe` installs a
-notarized app that works without any other prerequisite.
+**Acceptance.** `brew install --cask vladuzh/tap/qwen-scribe` installs the
+app; after the one-time Open Anyway approval it works without any other
+prerequisite.
 
 ---
 
@@ -480,19 +525,27 @@ a 6 GB screen recording transcribes from its path with no staged copy.
 - **Localization and the accessibility audit.** Worth doing once the
   interface stops changing weekly; the week 7 README rewrite and screenshots
   are the natural moment to plan it.
+- **Developer ID signing and notarization.** Not deferred by choice but by
+  the enrolment's timing, and not blocking anything: `release.yml` signs
+  and notarizes as soon as the secrets exist. What the signed release will
+  need is written down where it belongs so it is not rediscovered: the
+  library-validation entitlement for the bundled interpreter (week 6), the
+  hands-on microphone check of a hardened-runtime build (week 2), and the
+  note in that release's notes that users re-grant the three permissions
+  once because the app's identity changes.
 
 ## Owner action checklist, dated
 
 | By | Action |
 | --- | --- |
-| Thu 3 Sep | Enrol in the Apple Developer Program |
-| Fri 11 Sep | Fresh-clone test on a second Mac; tag and publish `v0.2.2-beta.1`; pin the testing thread |
-| Fri 18 Sep | Certificate and API key created; six secrets added; dry-run archive installed and mic-checked |
+| Thu 3 Sep | Enrol in the Apple Developer Program (applied; payment deferred, see the revision above) |
+| Fri 11 Sep | Fresh-clone test on a second Mac; pin the testing thread (`v0.2.2` shipped inside `v0.3.0-beta.1` on 4 Sep) |
+| Fri 18 Sep | Dry-run archive installed and mic-checked. Certificate, API key and the six secrets whenever the enrolment clears |
 | Fri 25 Sep | Week 3 manual tests on the dry-run build |
 | Thu 1 Oct | Fn key ship-or-fallback decision |
-| Fri 2 Oct | Tag and publish `v0.3.0-beta.1`; announce |
+| Fri 2 Oct | Announce `v0.3.0-beta.1` (published 4 Sep) |
 | Fri 9 Oct | `compare_models.py` runs on three recordings per variant |
-| Mon 12 Oct | Bundled-runtime notarization dry run |
+| Mon 12 Oct | Bundled-runtime CI check green; no-Python Mac test scheduled |
 | Fri 16 Oct | No-Homebrew Mac test of the self-contained build |
 | Thu 22 Oct | Install matrix |
 | Fri 23 Oct | Create the tap repository; tag and publish `v0.4.0-beta.1` |
@@ -500,9 +553,12 @@ a 6 GB screen recording transcribes from its path with no staged copy.
 
 ## What success looks like on 1 November
 
-- Four releases in eight weeks, the last three signed and notarized.
-- A first-time user with a bare Mac installs from a download or a cask and
-  dictates within five minutes, without a terminal.
+- Four releases in eight weeks, ad-hoc signed until the Developer ID
+  arrives; the pipeline signs and notarizes the first release after it
+  does, with no other change.
+- A first-time user with a bare Mac installs from a download or a cask,
+  approves the app once under Open Anyway, and dictates within five
+  minutes, without a terminal.
 - Dictation uses the personal dictionary, supports toggle mode and the Fn
   key, and can be kept out of history.
 - The 0.6B 4-bit model is available in the picker with published speed and
