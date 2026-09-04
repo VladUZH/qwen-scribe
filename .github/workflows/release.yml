@@ -5,10 +5,17 @@ name: Release
 # provenance notes. The release owner reviews the draft — and, until Developer
 # ID credentials are configured, optionally signs/notarizes locally — before
 # publishing. See RELEASING.md.
+#
+# Running the workflow by hand (Actions → Release → Run workflow) is a dry
+# run: it builds, signs and notarizes when the secrets exist, packages, and
+# uploads the archive, checksums and notes as a workflow artifact. It never
+# touches releases. This is how new signing credentials are exercised before
+# a real tag depends on them.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -36,12 +43,20 @@ jobs:
           python -m unittest discover -s tests
           bash -n run.sh scripts/*.sh macos/*.sh
           python scripts/check_repo.py
-          python -m compileall -q server.py quantize_8bit.py compare_models.py tests
+          python -m compileall -q server.py qwen_scribe quantize_8bit.py compare_models.py tests
 
       - name: Derive versions from the tag
         id: version
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            # A dry run has no tag: name the archive after the bundle version
+            # plus the run number, which the packaging script accepts as a
+            # pre-release suffix of that version.
+            BUNDLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' macos/QwenScribe-Info.plist)"
+            TAG="$BUNDLE-dryrun.$GITHUB_RUN_NUMBER"
+          else
+            TAG="${GITHUB_REF_NAME#v}"
+          fi
           source scripts/release_versions.sh
           if ! qs_valid_release_version "$TAG"; then
             echo "Unsupported release tag '$GITHUB_REF_NAME'; expected v0.2.0 or v0.2.0-beta.1." >&2
@@ -122,7 +137,11 @@ jobs:
       - name: Compose provenance notes
         run: |
           {
-            echo "Draft release built by CI from tag \`$GITHUB_REF_NAME\`."
+            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "Dry run built by CI from \`$GITHUB_REF_NAME\` (run $GITHUB_RUN_NUMBER); nothing was released."
+            else
+              echo "Draft release built by CI from tag \`$GITHUB_REF_NAME\`."
+            fi
             echo
             echo "## Provenance"
             echo
@@ -165,7 +184,19 @@ jobs:
             echo "Apple Silicon Mac with the Apple Command Line Tools."
           } > release-notes.md
 
+      - name: Upload the dry-run archive as a workflow artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: qwen-scribe-${{ steps.version.outputs.tag }}
+          path: |
+            dist/Qwen-Scribe-*.zip
+            dist/SHA256SUMS.txt
+            release-notes.md
+          if-no-files-found: error
+
       - name: Create draft release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

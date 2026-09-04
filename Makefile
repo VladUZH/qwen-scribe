@@ -3,7 +3,7 @@ SHELL_SCRIPTS = run.sh scripts/setup_python.sh scripts/build_macos_apps.sh \
                 scripts/package_release.sh scripts/notarize.sh scripts/release_versions.sh \
                 macos/launcher.sh macos/stop.sh
 
-.PHONY: setup setup-test run test lint-sh check app package clean
+.PHONY: setup setup-test run test test-js lint-sh lock check app package clean
 
 setup:
 	./scripts/setup_python.sh
@@ -19,13 +19,25 @@ test:
 	mkdir -p .build/test-data .build/pycache
 	QWEN_SCRIBE_DATA_DIR="$(CURDIR)/.build/test-data" PYTHONPYCACHEPREFIX="$(CURDIR)/.build/pycache" $(PYTHON) -m unittest discover -s tests -v
 
+# The sentence splitter and SRT builder run in the browser; Node's built-in
+# runner tests them without one. No dependencies, no build step.
+test-js:
+	node --test tests/js/transcript.test.mjs
+
+# pyproject.toml is the dependency source of truth. `uv lock` resolves it and
+# the export is what the launcher and ./run.sh install with pip.
+lock:
+	uv lock
+	$(PYTHON) scripts/export_lock.py
+
 # These scripts ship inside the app bundle, so a syntax error is a broken release.
 lint-sh:
 	bash -n $(SHELL_SCRIPTS)
 
-check: test lint-sh
+check: test test-js lint-sh
 	$(PYTHON) scripts/check_repo.py
-	PYTHONPYCACHEPREFIX="$(CURDIR)/.build/pycache" $(PYTHON) -m compileall -q server.py quantize_8bit.py compare_models.py tests
+	$(PYTHON) scripts/export_lock.py --check
+	PYTHONPYCACHEPREFIX="$(CURDIR)/.build/pycache" $(PYTHON) -m compileall -q server.py qwen_scribe quantize_8bit.py compare_models.py tests
 
 app:
 	./scripts/build_macos_apps.sh

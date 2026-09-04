@@ -2,6 +2,10 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <IOKit/hid/IOHIDKeys.h>
+#import <IOKit/hid/IOHIDLib.h>
+#import <IOKit/hid/IOHIDUsageTables.h>
+#import <ServiceManagement/ServiceManagement.h>
 #import <math.h>
 
 static NSString *const QSServerBase = @"http://127.0.0.1:8990";
@@ -14,10 +18,12 @@ static const CGKeyCode QSPasteKeyCode = 9;
 // <IOKit/hidsystem/IOLLEvent.h> (NX_DEVICER*KEYMASK): the device-independent
 // flags (e.g. NSEventModifierFlagCommand) stay set while the OTHER key of the
 // pair is held, which would swallow the key-up and leave the microphone
-// recording. Fn is deliberately NOT offered: macOS synthesizes fn-flagged
-// keyCode-63 flagsChanged events around every arrow/navigation key, so a
-// naive Fn hotkey would start dictation on PageUp. Supporting it needs an
-// IOHIDManager listener for the physical key (roadmapped).
+// recording.
+//
+// Fn is different. macOS synthesizes fn-flagged keyCode-63 flagsChanged
+// events around every arrow and navigation key, so the flag alone would start
+// dictation on PageUp. The physical key is watched instead, through the
+// keyboard's own HID reports (see installFnListener); its mask here is unused.
 typedef struct {
     const char *identifier;
     CGKeyCode keyCode;       // kVK_* virtual key code
@@ -25,11 +31,21 @@ typedef struct {
     const char *label;
 } QSHotkeySpec;
 
+static const CGKeyCode QSFnVirtualKey = 63;   // kVK_Function
+
 static const QSHotkeySpec QSHotkeyTable[] = {
     {"right_command", 54, 0x00000010, "Right \xE2\x8C\x98"},   // NX_DEVICERCMDKEYMASK
     {"right_option",  61, 0x00000040, "Right \xE2\x8C\xA5"},   // NX_DEVICERALTKEYMASK
     {"right_control", 62, 0x00002000, "Right \xE2\x8C\x83"},   // NX_DEVICERCTLKEYMASK
+    {"fn",            QSFnVirtualKey, 0, "Fn"},
 };
+
+// Apple keyboards report the physical Fn (Globe) key on the vendor top-case
+// usage page: kHIDPage_AppleVendorTopCase and kHIDUsage_AV_TopCase_KeyboardFn
+// in AppleHIDUsageTables.h, spelled out here so the build needs no extra
+// header.
+static const uint32_t QSAppleVendorTopCasePage = 0xFF;
+static const uint32_t QSTopCaseKeyboardFnUsage = 0x03;
 
 static const QSHotkeySpec *QSHotkeyForIdentifier(NSString *identifier) {
     for (size_t i = 0; i < sizeof(QSHotkeyTable) / sizeof(QSHotkeyTable[0]); i++) {
@@ -40,9 +56,15 @@ static const QSHotkeySpec *QSHotkeyForIdentifier(NSString *identifier) {
     return &QSHotkeyTable[0];   // right Command, the historical default
 }
 
-// A held key that is never released (a lost key-up, a Space switch) must not
-// leave dictation recording forever.
-static const NSTimeInterval QSMaximumRecordingSeconds = 120.0;
+// A held key that is never released (a lost key-up, a Space switch), or a
+// toggle nobody ends, must not leave dictation recording forever. The limit
+// comes from the settings; these are its default and its bounds, matching
+// DICTATION_*_SECONDS in the server's config.
+static const NSTimeInterval QSDefaultMaximumRecordingSeconds = 120.0;
+static const NSTimeInterval QSMinimumRecordingLimit = 60.0;
+static const NSTimeInterval QSMaximumRecordingLimit = 600.0;
+// In toggle mode a press shorter than this is a tap; a longer one is a hold.
+static const NSTimeInterval QSToggleTapSeconds = 0.4;
 
 static void QSAppendString(NSMutableData *data, NSString *string) {
     [data appendData:[string dataUsingEncoding:NSUTF8StringEncoding]];
@@ -51,14 +73,21 @@ static void QSAppendString(NSMutableData *data, NSString *string) {
 typedef NS_ENUM(NSInteger, QSHUDState) {
     QSHUDStateListening,
     QSHUDStateTranscribing,
+    QSHUDStateLoading,       // the server is loading (or first downloading) the model
     QSHUDStateInserted,
     QSHUDStateError,
 };
+
+// Wide enough for "Loading model…" followed by "1.2 of 3.4 GB".
+static const CGFloat QSHUDWidth = 244;
+static const CGFloat QSHUDHeight = 50;
 
 @interface QSHUDView : NSView
 @property (nonatomic) QSHUDState state;
 @property (nonatomic) CGFloat phase;
 @property (nonatomic, strong) NSTimer *animationTimer;
+// Small text after the label: the elapsed time of a toggled recording.
+@property (nonatomic, copy) NSString *detail;
 - (void)showState:(QSHUDState)state;
 - (void)stopAnimating;
 @end
@@ -70,9 +99,10 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 - (void)showState:(QSHUDState)state {
     self.state = state;
     self.phase = 0;
+    self.detail = nil;
     [self.animationTimer invalidate];
     self.animationTimer = nil;
-    if (state == QSHUDStateListening || state == QSHUDStateTranscribing) {
+    if (state == QSHUDStateListening || state == QSHUDStateTranscribing || state == QSHUDStateLoading) {
         __weak typeof(self) weakSelf = self;
         self.animationTimer = [NSTimer scheduledTimerWithTimeInterval:0.075 repeats:YES block:^(NSTimer *timer) {
             weakSelf.phase += 0.34;
@@ -107,6 +137,10 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
             accent = [NSColor colorWithRed:0.98 green:0.63 blue:0.25 alpha:1];
             label = @"Transcribing…";
             break;
+        case QSHUDStateLoading:
+            accent = [NSColor colorWithRed:0.62 green:0.47 blue:0.93 alpha:1];
+            label = @"Loading model…";
+            break;
         case QSHUDStateInserted:
             accent = [NSColor colorWithRed:0.44 green:0.82 blue:0.59 alpha:1];
             label = @"Text inserted";
@@ -119,7 +153,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 
     CGFloat centerY = NSMidY(self.bounds);
     CGFloat textX = 44;
-    if (self.state == QSHUDStateListening || self.state == QSHUDStateTranscribing) {
+    if (self.state == QSHUDStateListening || self.state == QSHUDStateTranscribing || self.state == QSHUDStateLoading) {
         CGFloat pulse = 0.5 + 0.5 * sin(self.phase);
         [[accent colorWithAlphaComponent:0.15 + pulse * 0.12] setFill];
         [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(14 - pulse * 2, centerY - 7 - pulse * 2,
@@ -157,6 +191,15 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     };
     NSSize textSize = [label sizeWithAttributes:attributes];
     [label drawAtPoint:NSMakePoint(textX, centerY - textSize.height / 2) withAttributes:attributes];
+    if (self.detail.length) {
+        NSDictionary *detailAttributes = @{
+            NSFontAttributeName: [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightMedium],
+            NSForegroundColorAttributeName: [NSColor colorWithWhite:0.96 alpha:0.7],
+        };
+        NSSize detailSize = [self.detail sizeWithAttributes:detailAttributes];
+        [self.detail drawAtPoint:NSMakePoint(textX + textSize.width + 7, centerY - detailSize.height / 2)
+                  withAttributes:detailAttributes];
+    }
 }
 
 @end
@@ -174,7 +217,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 - (instancetype)init {
     self = [super init];
     if (self) {
-        NSRect frame = NSMakeRect(0, 0, 196, 50);
+        NSRect frame = NSMakeRect(0, 0, QSHUDWidth, QSHUDHeight);
         self.panel = [[NSPanel alloc] initWithContentRect:frame
                                                 styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
                                                   backing:NSBackingStoreBuffered
@@ -254,12 +297,66 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
 @property (nonatomic) const QSHotkeySpec *hotkey;
 @property (nonatomic, copy) NSString *dictationModel;
 @property (nonatomic, copy) NSString *dictationLanguage;
+// Names and terms from the settings, sent as the model's vocabulary hint.
+@property (nonatomic, copy) NSString *dictationDictionary;
+// "hold" or "toggle"; ids match DICTATION_MODES in the server's config.
+@property (nonatomic, copy) NSString *dictationMode;
+@property (nonatomic) NSTimeInterval maximumRecordingSeconds;
+// Toggle mode: when the starting press began, to tell a tap from a hold.
+@property (nonatomic, strong) NSDate *pressStartedAt;
+// Toggle mode: the release of the press that stopped a recording is not a
+// new instruction.
+@property (nonatomic) BOOL ignoreNextRelease;
+@property (nonatomic, strong) NSTimer *elapsedTimer;
 @property (nonatomic) BOOL serverReachable;
 @property (nonatomic) BOOL serverTransitionInProgress;
 @property (atomic) BOOL shuttingDown;
 @property (nonatomic) BOOL hotkeyIsDown;
 @property (nonatomic) BOOL busy;
+// The HUD state last shown from a job poll, so a poll every half second
+// does not restart the animation every half second.
+@property (nonatomic) NSInteger polledState;
+// The physical-Fn-key listener, and the keyboards seen that have an Fn key.
+@property (nonatomic, assign) IOHIDManagerRef hidManager;
+@property (nonatomic) BOOL hidOpened;
+@property (nonatomic, strong) NSMutableSet<NSValue *> *fnKeyboards;
+- (void)handleFnKey:(BOOL)isDown;
+- (void)keyboardAttached:(IOHIDDeviceRef)device;
+- (void)keyboardDetached:(IOHIDDeviceRef)device;
 @end
+
+static BOOL QSDeviceHasFnKey(IOHIDDeviceRef device) {
+    NSDictionary *fnElement = @{
+        @kIOHIDElementUsagePageKey: @(QSAppleVendorTopCasePage),
+        @kIOHIDElementUsageKey: @(QSTopCaseKeyboardFnUsage),
+    };
+    CFArrayRef elements = IOHIDDeviceCopyMatchingElements(device, (__bridge CFDictionaryRef)fnElement,
+                                                          kIOHIDOptionsTypeNone);
+    BOOL found = elements != NULL && CFArrayGetCount(elements) > 0;
+    if (elements) CFRelease(elements);
+    return found;
+}
+
+static void QSHIDDeviceMatched(void *context, IOReturn result, void *sender, IOHIDDeviceRef device) {
+    if (result != kIOReturnSuccess) return;
+    [(__bridge QSDictationDelegate *)context keyboardAttached:device];
+}
+
+static void QSHIDDeviceRemoved(void *context, IOReturn result, void *sender, IOHIDDeviceRef device) {
+    [(__bridge QSDictationDelegate *)context keyboardDetached:device];
+}
+
+static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHIDValueRef value) {
+    if (result != kIOReturnSuccess) return;
+    IOHIDElementRef element = IOHIDValueGetElement(value);
+    if (IOHIDElementGetUsagePage(element) != QSAppleVendorTopCasePage
+        || IOHIDElementGetUsage(element) != QSTopCaseKeyboardFnUsage) {
+        return;
+    }
+    BOOL isDown = IOHIDValueGetIntegerValue(value) != 0;
+    QSDictationDelegate *delegate = (__bridge QSDictationDelegate *)context;
+    dispatch_async(dispatch_get_main_queue(), ^{ [delegate handleFnKey:isDown]; });
+}
 
 @implementation QSDictationDelegate
 
@@ -324,6 +421,9 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     self.hotkey = &QSHotkeyTable[0];
     self.dictationModel = @"1.7b";
     self.dictationLanguage = @"auto";
+    self.dictationDictionary = @"";
+    self.dictationMode = @"hold";
+    self.maximumRecordingSeconds = QSDefaultMaximumRecordingSeconds;
     self.hud = [[QSDictationHUD alloc] init];
     [self writeProcessIdentity];
     [self installTerminationHandler];
@@ -349,6 +449,8 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
         [weakSelf handleFlagsChanged:event];
         return event;
     }];
+    self.fnKeyboards = [NSMutableSet set];
+    [self installFnListener];
 
     [self sendHeartbeat];
     self.heartbeatTimer = [NSTimer scheduledTimerWithTimeInterval:10
@@ -377,6 +479,14 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     self.localMonitor = nil;
     [self.heartbeatTimer invalidate];
     [self.recordingWatchdog invalidate];
+    [self.elapsedTimer invalidate];
+    if (self.hidManager) {
+        IOHIDManagerUnscheduleFromRunLoop(self.hidManager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
+        if (self.hidOpened) IOHIDManagerClose(self.hidManager, kIOHIDOptionsTypeNone);
+        CFRelease(self.hidManager);
+        self.hidManager = NULL;
+        self.hidOpened = NO;
+    }
     if (self.recordingURL) {
         [[NSFileManager defaultManager] removeItemAtURL:self.recordingURL error:nil];
         self.recordingURL = nil;
@@ -420,13 +530,99 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     }
 }
 
+// ── The Fn key, watched as a physical key ─────────────────────────────────
+
+- (void)installFnListener {
+    // Every keyboard is matched, so a keyboard that gains or loses an Fn key
+    // is noticed; only the Fn element's values are delivered.
+    self.hidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
+    if (!self.hidManager) return;
+    NSDictionary *keyboards = @{
+        @kIOHIDDeviceUsagePageKey: @(kHIDPage_GenericDesktop),
+        @kIOHIDDeviceUsageKey: @(kHIDUsage_GD_Keyboard),
+    };
+    NSDictionary *fnOnly = @{
+        @kIOHIDElementUsagePageKey: @(QSAppleVendorTopCasePage),
+        @kIOHIDElementUsageKey: @(QSTopCaseKeyboardFnUsage),
+    };
+    IOHIDManagerSetDeviceMatching(self.hidManager, (__bridge CFDictionaryRef)keyboards);
+    IOHIDManagerSetInputValueMatching(self.hidManager, (__bridge CFDictionaryRef)fnOnly);
+    IOHIDManagerRegisterDeviceMatchingCallback(self.hidManager, QSHIDDeviceMatched, (__bridge void *)self);
+    IOHIDManagerRegisterDeviceRemovalCallback(self.hidManager, QSHIDDeviceRemoved, (__bridge void *)self);
+    IOHIDManagerRegisterInputValueCallback(self.hidManager, QSHIDValueChanged, (__bridge void *)self);
+    IOHIDManagerScheduleWithRunLoop(self.hidManager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
+    [self openFnListener];
+}
+
+/// Opening needs Input Monitoring, the same grant the modifier keys need.
+/// Retried from the heartbeat until it succeeds, so granting the permission
+/// after launch is enough.
+- (void)openFnListener {
+    if (!self.hidManager || self.hidOpened) return;
+    IOReturn opened = IOHIDManagerOpen(self.hidManager, kIOHIDOptionsTypeNone);
+    if (opened == kIOReturnSuccess) {
+        self.hidOpened = YES;
+    } else if (opened != kIOReturnNotPermitted) {
+        fprintf(stderr, "Qwen Scribe dictation: the Fn key listener could not start (0x%x)\n", opened);
+    }
+}
+
+- (void)keyboardAttached:(IOHIDDeviceRef)device {
+    if (QSDeviceHasFnKey(device)) [self.fnKeyboards addObject:[NSValue valueWithPointer:device]];
+}
+
+- (void)keyboardDetached:(IOHIDDeviceRef)device {
+    [self.fnKeyboards removeObject:[NSValue valueWithPointer:device]];
+}
+
+- (BOOL)fnKeyAvailable {
+    return self.fnKeyboards.count > 0;
+}
+
+- (void)handleFnKey:(BOOL)isDown {
+    if (self.hotkey->keyCode != QSFnVirtualKey) return;
+    [self hotkeyTransition:isDown];
+}
+
+// ── The modifier keys, watched through flagsChanged ───────────────────────
+
 - (void)handleFlagsChanged:(NSEvent *)event {
     if (event.keyCode != self.hotkey->keyCode) return;
+    // Fn arrives through the HID listener; the flagsChanged events for it
+    // are the synthesized ones this path exists to ignore.
+    if (self.hotkey->keyCode == QSFnVirtualKey) return;
     BOOL isDown = (event.modifierFlags & self.hotkey->mask) != 0;
+    [self hotkeyTransition:isDown];
+}
+
+- (void)hotkeyTransition:(BOOL)isDown {
     if (isDown == self.hotkeyIsDown) return;
     self.hotkeyIsDown = isDown;
-    if (isDown) [self beginRecording];
-    else [self finishRecording];
+    if (![self.dictationMode isEqualToString:@"toggle"]) {
+        if (isDown) [self beginRecording];
+        else [self finishRecording];
+        return;
+    }
+    // Toggle: a tap starts, the next tap stops. A press held longer than a
+    // tap still behaves as hold-to-talk, so the two modes share muscle memory.
+    if (isDown) {
+        if (self.recorder) {
+            [self finishRecording];
+            self.ignoreNextRelease = YES;
+        } else {
+            self.pressStartedAt = [NSDate date];
+            [self beginRecording];
+        }
+        return;
+    }
+    if (self.ignoreNextRelease) {
+        self.ignoreNextRelease = NO;
+        return;
+    }
+    if (self.recorder && self.pressStartedAt
+        && -[self.pressStartedAt timeIntervalSinceNow] >= QSToggleTapSeconds) {
+        [self finishRecording];   // held, not tapped
+    }
 }
 
 - (void)beginRecording {
@@ -469,22 +665,43 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     [self.hud showState:QSHUDStateListening];
     [self playSound:@"Tink"];
 
-    // If the key-up never arrives, stop on our own rather than record forever.
-    [self.recordingWatchdog invalidate];
     __weak typeof(self) weakSelf = self;
-    self.recordingWatchdog = [NSTimer scheduledTimerWithTimeInterval:QSMaximumRecordingSeconds
+    // If the key-up never arrives, or a toggle is never ended, stop on our
+    // own rather than record forever.
+    [self.recordingWatchdog invalidate];
+    self.recordingWatchdog = [NSTimer scheduledTimerWithTimeInterval:self.maximumRecordingSeconds
                                                              repeats:NO
                                                                block:^(NSTimer *timer) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf.recorder) return;
         strongSelf.hotkeyIsDown = NO;
+        strongSelf.ignoreNextRelease = NO;
         [strongSelf finishRecording];
     }];
+    // A toggled recording has no held key to remind the user it is running,
+    // so the HUD counts the seconds instead.
+    [self.elapsedTimer invalidate];
+    self.elapsedTimer = nil;
+    if ([self.dictationMode isEqualToString:@"toggle"]) {
+        self.elapsedTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                            repeats:YES
+                                                              block:^(NSTimer *timer) {
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf.recorder || !strongSelf.recordingStartedAt) return;
+            NSInteger seconds = (NSInteger)(-[strongSelf.recordingStartedAt timeIntervalSinceNow]);
+            strongSelf.hud.view.detail = [NSString stringWithFormat:@"%ld:%02ld",
+                                          (long)(seconds / 60), (long)(seconds % 60)];
+            strongSelf.hud.view.needsDisplay = YES;
+        }];
+    }
 }
 
 - (void)finishRecording {
     [self.recordingWatchdog invalidate];
     self.recordingWatchdog = nil;
+    [self.elapsedTimer invalidate];
+    self.elapsedTimer = nil;
+    self.pressStartedAt = nil;
     if (!self.recorder || !self.recordingURL) return;
     [self.recorder stop];
     self.recorder = nil;
@@ -501,6 +718,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
         return;
     }
     [self.hud showState:QSHUDStateTranscribing];
+    self.polledState = QSHUDStateTranscribing;
     [self uploadRecording:self.recordingURL];
 }
 
@@ -522,7 +740,10 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     appendField(@"language", self.dictationLanguage ?: @"auto");
     appendField(@"timestamps", @"false");
     appendField(@"turbo", @"false");
-    appendField(@"context", @"");
+    appendField(@"context", self.dictationDictionary ?: @"");
+    // Lets the server apply the dictation-only choices, such as keeping
+    // dictations out of history.
+    appendField(@"source", @"dictation");
     QSAppendString(body, [NSString stringWithFormat:@"--%@\r\n", boundary]);
     NSDateFormatter *filenameFormatter = [[NSDateFormatter alloc] init];
     filenameFormatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
@@ -592,12 +813,37 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
         } else if ([status isEqualToString:@"error"]) {
             [weakSelf reportFailure:state[@"detail"] ?: @"Transcription failed"];
         } else {
+            // Loading the model, or downloading it the first time, is the one
+            // wait long enough to deserve its own words.
+            QSHUDState shown = [status isEqualToString:@"loading"] ? QSHUDStateLoading : QSHUDStateTranscribing;
+            NSString *detail = [state[@"detail"] isKindOfClass:NSString.class] ? state[@"detail"] : nil;
+            dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf showPolledState:shown detail:detail]; });
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
                            dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
                 [weakSelf pollJob:jobID attempt:attempt + 1];
             });
         }
     }] resume];
+}
+
+- (void)showPolledState:(QSHUDState)state detail:(NSString *)detail {
+    if (self.shuttingDown || !self.busy) return;
+    if (self.polledState != state) {
+        [self.hud showState:state];
+        self.polledState = state;
+    }
+    // "Downloading model · 1.2 of 3.4 GB" carries the only figure worth
+    // showing beside the label.
+    NSString *figure = nil;
+    NSRange separator = [detail rangeOfString:@"· "];
+    if (state == QSHUDStateLoading && separator.location != NSNotFound) {
+        figure = [detail substringFromIndex:NSMaxRange(separator)];
+    }
+    BOOL changed = (figure || self.hud.view.detail) && ![figure isEqualToString:self.hud.view.detail];
+    if (changed) {
+        self.hud.view.detail = figure;
+        self.hud.view.needsDisplay = YES;
+    }
 }
 
 /// Leave the transcript on the clipboard and tell the user why it was not typed.
@@ -781,6 +1027,8 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     request.HTTPMethod = @"POST";
     [[NSURLSession.sharedSession dataTaskWithRequest:request] resume];
     [self fetchSettings];
+    // Input Monitoring may have been granted since launch.
+    if (inputMonitoring) [self openFnListener];
 }
 
 // ── Settings (owned by the server; the helper is a follower) ──────────────
@@ -811,6 +1059,17 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     if ([model isKindOfClass:NSString.class]) self.dictationModel = model;
     NSString *language = dictation[@"language"];
     if ([language isKindOfClass:NSString.class]) self.dictationLanguage = language;
+    NSString *dictionary = dictation[@"dictionary"];
+    if ([dictionary isKindOfClass:NSString.class]) self.dictationDictionary = dictionary;
+    NSString *mode = dictation[@"mode"];
+    // Like the key, never changed under an active recording: the gesture
+    // that started it must be the one that stops it.
+    if ([mode isKindOfClass:NSString.class] && !self.recorder) self.dictationMode = mode;
+    NSNumber *limit = dictation[@"max_seconds"];
+    if ([limit isKindOfClass:NSNumber.class]) {
+        self.maximumRecordingSeconds = MIN(MAX(limit.doubleValue, QSMinimumRecordingLimit),
+                                           QSMaximumRecordingLimit);
+    }
     NSString *hotkeyIdentifier = dictation[@"hotkey"];
     if ([hotkeyIdentifier isKindOfClass:NSString.class]) {
         const QSHotkeySpec *spec = QSHotkeyForIdentifier(hotkeyIdentifier);
@@ -870,7 +1129,9 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     BOOL inputMonitoring = CGPreflightListenEventAccess();
     BOOL microphone = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio] == AVAuthorizationStatusAuthorized;
     if (accessibility && inputMonitoring && microphone) {
-        return [NSString stringWithFormat:@"Dictation ready — hold %@", @(self.hotkey->label)];
+        BOOL toggle = [self.dictationMode isEqualToString:@"toggle"];
+        return [NSString stringWithFormat:@"Dictation ready — %@ %@",
+                toggle ? @"press" : @"hold", @(self.hotkey->label)];
     }
     return @"Dictation: grant access in System Settings";
 }
@@ -895,16 +1156,53 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     hotkeyMenu.autoenablesItems = NO;
     for (size_t i = 0; i < sizeof(QSHotkeyTable) / sizeof(QSHotkeyTable[0]); i++) {
         const QSHotkeySpec *spec = &QSHotkeyTable[i];
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@(spec->label)
+        BOOL isFn = spec->keyCode == QSFnVirtualKey;
+        NSString *title = @(spec->label);
+        if (isFn && ![self fnKeyAvailable]) {
+            title = @"Fn (no keyboard with an Fn key attached)";
+        }
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
                                                       action:@selector(selectHotkey:) keyEquivalent:@""];
         item.target = self;
         item.representedObject = @(spec->identifier);
         item.state = (spec == self.hotkey) ? NSControlStateValueOn : NSControlStateValueOff;
-        item.enabled = self.serverReachable;
+        item.enabled = self.serverReachable && (!isFn || [self fnKeyAvailable]);
         [hotkeyMenu addItem:item];
     }
     hotkeyRoot.submenu = hotkeyMenu;
     [menu addItem:hotkeyRoot];
+
+    NSMenuItem *modeRoot = [[NSMenuItem alloc] initWithTitle:@"Dictation Mode"
+                                                      action:nil keyEquivalent:@""];
+    NSMenu *modeMenu = [[NSMenu alloc] init];
+    modeMenu.autoenablesItems = NO;
+    NSArray<NSArray<NSString *> *> *modes = @[
+        @[@"hold", @"Hold to Talk"],
+        @[@"toggle", @"Press to Start, Press to Stop"],
+    ];
+    for (NSArray<NSString *> *entry in modes) {
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:entry[1]
+                                                      action:@selector(selectMode:) keyEquivalent:@""];
+        item.target = self;
+        item.representedObject = entry[0];
+        item.state = [self.dictationMode isEqualToString:entry[0]] ? NSControlStateValueOn : NSControlStateValueOff;
+        item.enabled = self.serverReachable;
+        [modeMenu addItem:item];
+    }
+    modeRoot.submenu = modeMenu;
+    [menu addItem:modeRoot];
+
+    // The login item is macOS's own record, read fresh each time the menu
+    // opens, so the check mark is the truth and not a cached belief.
+    SMAppServiceStatus loginStatus = SMAppService.mainAppService.status;
+    NSString *loginTitle = loginStatus == SMAppServiceStatusRequiresApproval
+        ? @"Launch at Login (approve in System Settings)"
+        : @"Launch at Login";
+    NSMenuItem *login = [[NSMenuItem alloc] initWithTitle:loginTitle
+                                                   action:@selector(toggleLaunchAtLogin:) keyEquivalent:@""];
+    login.target = self;
+    login.state = loginStatus == SMAppServiceStatusEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [menu addItem:login];
 
     [menu addItem:NSMenuItem.separatorItem];
     NSMenuItem *restart = [[NSMenuItem alloc] initWithTitle:@"Restart Server"
@@ -927,6 +1225,38 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     NSString *identifier = sender.representedObject;
     if ([identifier isKindOfClass:NSString.class]) {
         [self pushDictationSetting:@"hotkey" value:identifier];
+    }
+}
+
+- (void)selectMode:(NSMenuItem *)sender {
+    NSString *identifier = sender.representedObject;
+    if ([identifier isKindOfClass:NSString.class]) {
+        [self pushDictationSetting:@"mode" value:identifier];
+    }
+}
+
+/// Registers or removes the app as a login item through SMAppService, which
+/// keys the item to this bundle's location: the README asks for the app to
+/// live in /Applications so a rebuild does not leave the item pointing at a
+/// bundle that moved.
+- (void)toggleLaunchAtLogin:(id)sender {
+    SMAppService *service = SMAppService.mainAppService;
+    if (service.status == SMAppServiceStatusRequiresApproval) {
+        // macOS wants the user to allow it under Login Items; take them there.
+        [SMAppService openSystemSettingsLoginItems];
+        return;
+    }
+    NSError *error = nil;
+    BOOL changed;
+    if (service.status == SMAppServiceStatusEnabled) {
+        changed = [service unregisterAndReturnError:&error];
+    } else {
+        changed = [service registerAndReturnError:&error];
+    }
+    if (!changed) {
+        fprintf(stderr, "Qwen Scribe: could not change the login item: %s\n",
+                error.localizedDescription.UTF8String ?: "unknown error");
+        [self playSound:@"Basso"];
     }
 }
 
@@ -1011,6 +1341,9 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
         }
         [strongSelf.recordingWatchdog invalidate];
         strongSelf.recordingWatchdog = nil;
+        [strongSelf.elapsedTimer invalidate];
+        strongSelf.elapsedTimer = nil;
+        strongSelf.pressStartedAt = nil;
         strongSelf.recordingURL = nil;
         strongSelf.recorder = nil;
         strongSelf.recordingStartedAt = nil;
@@ -1046,11 +1379,13 @@ int main(int argc, const char *argv[]) {
         if (argc > 2 && strcmp(argv[1], "--render-hud") == 0) {
             NSApplication *application = NSApplication.sharedApplication;
             [application setActivationPolicy:NSApplicationActivationPolicyAccessory];
-            NSRect frame = NSMakeRect(0, 0, 196, 50);
+            NSRect frame = NSMakeRect(0, 0, QSHUDWidth, QSHUDHeight);
             QSHUDView *view = [[QSHUDView alloc] initWithFrame:frame];
             QSHUDState state = QSHUDStateListening;
             if (argc > 3 && strcmp(argv[3], "transcribing") == 0) {
                 state = QSHUDStateTranscribing;
+            } else if (argc > 3 && strcmp(argv[3], "loading") == 0) {
+                state = QSHUDStateLoading;
             } else if (argc > 3 && strcmp(argv[3], "inserted") == 0) {
                 state = QSHUDStateInserted;
             } else if (argc > 3 && strcmp(argv[3], "error") == 0) {
@@ -1061,8 +1396,8 @@ int main(int argc, const char *argv[]) {
             view.phase = 1.15;
             NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc]
                 initWithBitmapDataPlanes:NULL
-                pixelsWide:392
-                pixelsHigh:100
+                pixelsWide:(NSInteger)(QSHUDWidth * 2)
+                pixelsHigh:(NSInteger)(QSHUDHeight * 2)
                 bitsPerSample:8
                 samplesPerPixel:4
                 hasAlpha:YES

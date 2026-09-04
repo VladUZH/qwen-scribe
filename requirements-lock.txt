@@ -1,44 +1,46 @@
-# Fully resolved runtime for v0.2.1-beta.1. Release CI validates it on macOS
-# arm64 with Python 3.12.
-# Update intentionally after reviewing upstream release notes and running the
-# complete test/build workflow.
+# Fully resolved runtime for macOS arm64 on Python 3.12 or newer. Generated
+# from uv.lock by `make lock` (scripts/export_lock.py); do not edit by hand.
+# To change a dependency: edit pyproject.toml, run `uv lock`, then `make lock`.
+# CI fails when this file has drifted from uv.lock. Release CI validates it on
+# macOS arm64 with Python 3.12.
 annotated-doc==0.0.5
 annotated-types==0.8.0
-anyio==4.14.2
+anyio==4.15.0
 certifi==2026.7.22
-click==8.4.2
-Cython==3.2.9
-dyNET38==2.2
+click==8.5.0
+cloudpickle==3.1.2
+cython==3.3.0
+dynet38==2.2
 fastapi==0.141.1
-filelock==3.32.2
+filelock==3.32.5
 fsspec==2026.7.0
 h11==0.16.0
 hf-xet==1.6.0
 httpcore==1.0.9
 httpx==0.28.1
-huggingface_hub==1.27.0
-idna==3.18
-joblib==1.5.3
-mlx==0.32.0
-mlx-metal==0.32.0
-mlx-qwen3-asr[aligner]==0.3.5
+huggingface-hub==1.30.0
+idna==3.19
+joblib==1.6.0
+mlx==0.32.2
+mlx-metal==0.32.2
+mlx-qwen3-asr==0.3.5
 nagisa==0.3.0
-narwhals==2.24.0
-numpy==2.5.1
+narwhals==2.25.0
+numpy==2.5.2
 packaging==26.3
 psutil==7.2.2
-pydantic==2.13.4
-pydantic_core==2.46.4
+pydantic==2.13.5
+pydantic-core==2.46.5
 python-multipart==0.0.32
-PyYAML==6.0.3
-regex==2026.7.19
+pyyaml==6.0.3
+regex==2026.9.3
 scikit-learn==1.9.0
-scipy==1.18.0
+scipy==1.18.1
 six==1.17.0
 soynlp==0.0.493
 starlette==1.6.0
 threadpoolctl==3.6.0
 tqdm==4.70.0
-typing-inspection==0.4.2
-typing_extensions==4.16.0
+typing-extensions==4.16.0
+typing-inspection==0.4.4
 uvicorn==0.52.1

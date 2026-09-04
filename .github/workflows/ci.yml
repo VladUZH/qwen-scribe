@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets a branch be built on the macOS runner before a pull request exists,
+  # which is the only way to compile the native helper without a Mac at hand.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -34,12 +37,18 @@ jobs:
           QWEN_SCRIBE_DATA_DIR: ${{ runner.temp }}/qwen-scribe-test-data
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/qwen-scribe-pycache
         run: python -m unittest discover -s tests -v
+      - name: Run interface tests
+        run: node --test tests/js/transcript.test.mjs
       - name: Check publishable source
         run: python scripts/check_repo.py
+      - name: Check the dependency lock agrees with uv.lock
+        run: |
+          python -m pip install --disable-pip-version-check "uv==0.8.17"
+          python scripts/export_lock.py --check
       - name: Compile Python sources
         env:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/qwen-scribe-pycache
-        run: python -m compileall -q server.py quantize_8bit.py compare_models.py tests
+        run: python -m compileall -q server.py qwen_scribe quantize_8bit.py compare_models.py tests
 
   macos-app:
     name: Build macOS arm64 apps
@@ -49,10 +58,20 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Resolve the shipped dependency lock
-        # The set users actually install. Nothing else in CI proves it can
-        # still be resolved on the minimum supported interpreter.
-        run: python -m pip install --dry-run --ignore-installed -r requirements-lock.txt
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+      - name: Install the shipped dependency lock
+        # The set users actually install, installed for real on the minimum
+        # supported interpreter rather than dry-run resolved, so the tests can
+        # run against it. Model weights are still never downloaded.
+        run: python -m pip install --disable-pip-version-check -r requirements-lock.txt -r requirements-test.txt
+      - name: Run tests against the shipped runtime
+        # This is the one place the test that compares the language list with
+        # the installed model's own table is not skipped.
+        env:
+          QWEN_SCRIBE_DATA_DIR: ${{ runner.temp }}/qwen-scribe-test-data
+          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/qwen-scribe-pycache
+        run: python -m unittest discover -s tests -v
       - name: Build app bundles
         run: make app
       - name: Verify bundles

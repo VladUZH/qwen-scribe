@@ -68,7 +68,7 @@ if [ "$MACOS_MAJOR" -lt 14 ]; then
   exit 1
 fi
 
-if [ ! -f "$RESOURCES_DIR/server.py" ] || [ ! -f "$RESOURCES_DIR/requirements-lock.txt" ]; then
+if [ ! -f "$RESOURCES_DIR/server.py" ] || [ ! -d "$RESOURCES_DIR/qwen_scribe" ] || [ ! -f "$RESOURCES_DIR/requirements-lock.txt" ]; then
   dialog "This Qwen Scribe app is incomplete. Build it again from the source repository."
   exit 1
 fi
@@ -121,6 +121,11 @@ prepare_runtime() {
   mkdir -p "$RUNTIME_DIR/models" || return 1
   /bin/cp -f "$RESOURCES_DIR/server.py" "$RESOURCES_DIR/requirements.txt" "$RESOURCES_DIR/requirements-lock.txt" "$RUNTIME_DIR/" >> "$LOG" 2>&1 || return 1
   /usr/bin/ditto "$RESOURCES_DIR/static" "$RUNTIME_DIR/static" >> "$LOG" 2>&1 || return 1
+  # Replace rather than merge: a module removed upstream must not survive
+  # in the runtime copy and shadow the new layout.
+  rm -rf "$RUNTIME_DIR/qwen_scribe" || return 1
+  /usr/bin/ditto "$RESOURCES_DIR/qwen_scribe" "$RUNTIME_DIR/qwen_scribe" >> "$LOG" 2>&1 || return 1
+  find "$RUNTIME_DIR/qwen_scribe" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null
 }
 
 if ! prepare_runtime; then

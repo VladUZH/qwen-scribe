@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import types
+import shutil
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -21,7 +22,7 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
-import server
+from qwen_scribe import api, config, jobs, sessions, settings
 
 BASE_URL = "http://127.0.0.1:8990"
 WAV = b"RIFF\x00\x00\x00\x00WAVEfmt "
@@ -48,12 +49,12 @@ class WorkerTestCase(unittest.TestCase):
     """
 
     def setUp(self):
-        self.addCleanup(server.jobs.clear)
-        self.addCleanup(server.job_futures.clear)
-        self.addCleanup(server.retries_staging.clear)
+        self.addCleanup(jobs.jobs.clear)
+        self.addCleanup(jobs.job_futures.clear)
+        self.addCleanup(jobs.retries_staging.clear)
         transcripts = tempfile.TemporaryDirectory()
         self.addCleanup(transcripts.cleanup)
-        directory = mock.patch.object(server, "TRANSCRIPTS_DIR", Path(transcripts.name))
+        directory = mock.patch.object(config, "TRANSCRIPTS_DIR", Path(transcripts.name))
         directory.start()
         self.addCleanup(directory.stop)
         # Stage uploads somewhere of our own. Writing into the shared UPLOAD_DIR
@@ -61,9 +62,13 @@ class WorkerTestCase(unittest.TestCase):
         # same machine, where its startup sweep can see them.
         uploads = tempfile.TemporaryDirectory()
         self.addCleanup(uploads.cleanup)
-        upload_directory = mock.patch.object(server, "UPLOAD_DIR", Path(uploads.name))
+        upload_directory = mock.patch.object(config, "UPLOAD_DIR", Path(uploads.name))
         upload_directory.start()
         self.addCleanup(upload_directory.stop)
+        # The worker pre-fetches weights before loading; that is the network.
+        prefetch = mock.patch.object(sessions, "ensure_downloaded")
+        prefetch.start()
+        self.addCleanup(prefetch.stop)
 
     def install_audio_stubs(self, chunks: int, seconds_per_chunk: float = 30.0):
         samples = [0.0] * int(SAMPLE_RATE * seconds_per_chunk)
@@ -90,10 +95,10 @@ class WorkerTestCase(unittest.TestCase):
     def stage_job(self, **overrides) -> str:
         """Create a job record with a real staged upload file behind it."""
         job_id = uuid.uuid4().hex[:12]
-        upload = server.UPLOAD_DIR / f"{job_id}.wav"
+        upload = config.UPLOAD_DIR / f"{job_id}.wav"
         upload.write_bytes(WAV)
         self.addCleanup(upload.unlink, True)
-        server.jobs[job_id] = {
+        jobs.jobs[job_id] = {
             "id": job_id,
             "status": "queued",
             "detail": "Queued",
@@ -121,26 +126,26 @@ class WorkerTestCase(unittest.TestCase):
         """Run _run_job to completion against `session` and return the record."""
         self.install_audio_stubs(chunks)
         job_id = self.stage_job(**overrides)
-        with mock.patch.object(server, "get_session", return_value=session):
-            server._run_job(job_id)
-        return server.jobs[job_id]
+        with mock.patch.object(sessions, "get_session", return_value=session):
+            jobs._run_job(job_id)
+        return jobs.jobs[job_id]
 
 
 class JobUploadTests(unittest.TestCase):
     def setUp(self):
-        self.client = TestClient(server.app, base_url=BASE_URL)
+        self.client = TestClient(api.app, base_url=BASE_URL)
         self.temporary_directory = TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         upload_dir = Path(self.temporary_directory.name)
-        upload_patcher = mock.patch.object(server, "UPLOAD_DIR", upload_dir)
+        upload_patcher = mock.patch.object(config, "UPLOAD_DIR", upload_dir)
         upload_patcher.start()
         self.addCleanup(upload_patcher.stop)
         # Never start a real transcription; that would download model weights.
-        submit = mock.patch.object(server.executor, "submit")
+        submit = mock.patch.object(jobs.executor, "submit")
         self.submit = submit.start()
         self.addCleanup(submit.stop)
-        self.addCleanup(server.jobs.clear)
-        self.addCleanup(server.job_futures.clear)
+        self.addCleanup(jobs.jobs.clear)
+        self.addCleanup(jobs.job_futures.clear)
 
     def post(self, filename="clip.wav", content=WAV, **fields):
         data = {"model": "1.7b", "language": "English", **fields}
@@ -149,7 +154,7 @@ class JobUploadTests(unittest.TestCase):
         )
 
     def leftover_uploads(self):
-        return sorted(path.name for path in server.UPLOAD_DIR.iterdir())
+        return sorted(path.name for path in config.UPLOAD_DIR.iterdir())
 
     def test_accepts_a_wav_upload_and_queues_one_job(self):
         before = self.leftover_uploads()
@@ -157,14 +162,14 @@ class JobUploadTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
         job_id = response.json()["id"]
-        self.assertIn(job_id, server.jobs)
-        self.assertEqual(server.jobs[job_id]["status"], "queued")
-        self.assertEqual(server.jobs[job_id]["size"], len(WAV))
-        self.submit.assert_called_once_with(server._run_job, job_id)
+        self.assertIn(job_id, jobs.jobs)
+        self.assertEqual(jobs.jobs[job_id]["status"], "queued")
+        self.assertEqual(jobs.jobs[job_id]["size"], len(WAV))
+        self.submit.assert_called_once_with(jobs._run_job, job_id)
 
         staged = set(self.leftover_uploads()) - set(before)
         self.assertEqual(staged, {f"{job_id}.wav"})
-        (server.UPLOAD_DIR / f"{job_id}.wav").unlink()
+        (config.UPLOAD_DIR / f"{job_id}.wav").unlink()
 
     def test_rejects_unknown_model(self):
         response = self.post(model="70b")
@@ -185,7 +190,7 @@ class JobUploadTests(unittest.TestCase):
         self.assertEqual(self.post(filename="recording").status_code, 400)
 
     def test_non_wav_upload_requires_ffmpeg(self):
-        with mock.patch.object(server.shutil, "which", return_value=None):
+        with mock.patch.object(shutil, "which", return_value=None):
             response = self.post(filename="clip.m4a")
             self.assertEqual(response.status_code, 400)
             self.assertIn("ffmpeg", response.json()["detail"])
@@ -194,7 +199,7 @@ class JobUploadTests(unittest.TestCase):
 
     def test_oversize_upload_is_rejected_and_leaves_no_temporary_file(self):
         before = self.leftover_uploads()
-        with mock.patch.object(server, "MAX_UPLOAD_BYTES", 8):
+        with mock.patch.object(config, "MAX_UPLOAD_BYTES", 8):
             response = self.post(content=b"x" * 4096)
         self.assertEqual(response.status_code, 413)
         self.assertEqual(self.leftover_uploads(), before)
@@ -202,7 +207,7 @@ class JobUploadTests(unittest.TestCase):
 
     def test_rejects_known_oversize_before_copying_the_upload(self):
         before = self.leftover_uploads()
-        with mock.patch.object(server, "MAX_UPLOAD_BYTES", 8), mock.patch(
+        with mock.patch.object(config, "MAX_UPLOAD_BYTES", 8), mock.patch(
             "starlette.datastructures.UploadFile.read"
         ) as read:
             response = self.post(content=b"x" * 4096)
@@ -216,7 +221,7 @@ class JobUploadTests(unittest.TestCase):
         before = self.leftover_uploads()
         response = self.client.post(
             "/api/jobs",
-            headers={"Content-Length": str(server.MAX_UPLOAD_BYTES + 8 * 1024 * 1024)},
+            headers={"Content-Length": str(config.MAX_UPLOAD_BYTES + 8 * 1024 * 1024)},
             content=b"ignored",
         )
         self.assertEqual(response.status_code, 413)
@@ -227,17 +232,32 @@ class JobUploadTests(unittest.TestCase):
         is paid for on every chunk of a two-hour file."""
         before = self.leftover_uploads()
 
-        response = self.post(context="x" * (server.MAX_CONTEXT_CHARS + 1))
+        response = self.post(context="x" * (config.MAX_CONTEXT_CHARS + 1))
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn(str(server.MAX_CONTEXT_CHARS), response.json()["detail"])
+        self.assertIn(str(config.MAX_CONTEXT_CHARS), response.json()["detail"])
         self.assertEqual(self.leftover_uploads(), before)
         self.submit.assert_not_called()
 
     def test_accepts_vocabulary_hints_up_to_the_limit(self):
-        response = self.post(context="x" * server.MAX_CONTEXT_CHARS)
+        response = self.post(context="x" * config.MAX_CONTEXT_CHARS)
         self.assertEqual(response.status_code, 200)
-        (server.UPLOAD_DIR / f"{response.json()['id']}.wav").unlink()
+        (config.UPLOAD_DIR / f"{response.json()['id']}.wav").unlink()
+
+    def test_accepts_the_dictation_source_and_rejects_others(self):
+        """The native helper labels its recordings so dictation-only choices
+        apply to them and never to an uploaded file."""
+        response = self.post(source="dictation")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(jobs.jobs[response.json()["id"]]["source"], "dictation")
+        (config.UPLOAD_DIR / f"{response.json()['id']}.wav").unlink()
+
+        self.assertEqual(self.post(source="telepathy").status_code, 400)
+
+        # An older helper that sends no source is an upload.
+        response = self.post()
+        self.assertEqual(jobs.jobs[response.json()["id"]]["source"], "upload")
+        (config.UPLOAD_DIR / f"{response.json()['id']}.wav").unlink()
 
     def test_unknown_job_is_a_404(self):
         self.assertEqual(self.client.get("/api/jobs/deadbeefdead").status_code, 404)
@@ -248,13 +268,13 @@ class JobUploadTests(unittest.TestCase):
         body = self.client.get(f"/api/jobs/{job_id}").json()
         self.assertNotIn("path", body)
         self.assertEqual(body["id"], job_id)
-        (server.UPLOAD_DIR / f"{job_id}.wav").unlink()
+        (config.UPLOAD_DIR / f"{job_id}.wav").unlink()
 
     def test_submission_failure_removes_the_job_and_staged_upload(self):
         self.submit.side_effect = RuntimeError("executor is shutting down")
         response = self.post()
         self.assertEqual(response.status_code, 503)
-        self.assertEqual(server.jobs, {})
+        self.assertEqual(jobs.jobs, {})
         self.assertEqual(self.leftover_uploads(), [])
 
 
@@ -265,18 +285,18 @@ class JobWorkerTests(unittest.TestCase):
         root = Path(self.temporary_directory.name)
         transcripts = root / "transcripts"
         transcripts.mkdir()
-        self.transcripts_patcher = mock.patch.object(server, "TRANSCRIPTS_DIR", transcripts)
+        self.transcripts_patcher = mock.patch.object(config, "TRANSCRIPTS_DIR", transcripts)
         self.transcripts_patcher.start()
         self.addCleanup(self.transcripts_patcher.stop)
-        self.addCleanup(server.jobs.clear)
-        self.addCleanup(server.job_futures.clear)
-        self.addCleanup(server.stopping.clear)
+        self.addCleanup(jobs.jobs.clear)
+        self.addCleanup(jobs.job_futures.clear)
+        self.addCleanup(jobs.stopping.clear)
 
     def test_turbo_reuses_the_draft_session_model_and_joins_cjk_chunks(self):
         staged = Path(self.temporary_directory.name) / "staged.wav"
         staged.write_bytes(WAV)
         job_id = "aaaaaaaaaaaa"
-        server.jobs[job_id] = {
+        jobs.jobs[job_id] = {
             "id": job_id,
             "status": "queued",
             "detail": "Queued",
@@ -315,7 +335,9 @@ class JobWorkerTests(unittest.TestCase):
         def session_for(model):
             return target_session if model == "1.7b" else draft_session
 
-        with mock.patch.object(server, "get_session", side_effect=session_for), mock.patch.dict(
+        with mock.patch.object(sessions, "ensure_downloaded"), mock.patch.object(
+            sessions, "get_session", side_effect=session_for
+        ), mock.patch.dict(
             "sys.modules",
             {
                 "mlx_qwen3_asr": package,
@@ -323,10 +345,10 @@ class JobWorkerTests(unittest.TestCase):
                 "mlx_qwen3_asr.chunking": chunking_module,
             },
         ):
-            server._run_job(job_id)
+            jobs._run_job(job_id)
 
-        self.assertEqual(server.jobs[job_id]["status"], "done")
-        self.assertEqual(server.jobs[job_id]["result"]["text"], "你好世界")
+        self.assertEqual(jobs.jobs[job_id]["status"], "done")
+        self.assertEqual(jobs.jobs[job_id]["result"]["text"], "你好世界")
         self.assertFalse(staged.exists())
         self.assertEqual(target_session.transcribe.call_count, 2)
         for call in target_session.transcribe.call_args_list:
@@ -434,10 +456,149 @@ class TimestampFallbackTests(WorkerTestCase):
         self.assertIsNone(job["result"]["segments"])
         self.assertIn("aligner asset missing", job["timestamps_unavailable"])
         saved = json.loads(
-            next(server.TRANSCRIPTS_DIR.glob("*.json")).read_text(encoding="utf-8")
+            next(config.TRANSCRIPTS_DIR.glob("*.json")).read_text(encoding="utf-8")
         )
         self.assertIsNone(saved["result"]["segments"])
         self.assertEqual(saved["result"]["text"], "first second")
+
+
+class DictationHistoryTests(WorkerTestCase):
+    """Keeping dictations out of history is a choice about dictation alone."""
+
+    class GoodSession:
+        def transcribe(self, audio, **kwargs):
+            return FakeResult(text="note to self")
+
+    def setUp(self):
+        super().setUp()
+        original = dict(settings._settings["dictation"])
+        self.addCleanup(lambda: settings._settings["dictation"].update(original))
+
+    def test_a_dictation_is_saved_like_any_transcript_by_default(self):
+        job = self.run_worker(self.GoodSession(), source="dictation")
+
+        self.assertEqual(job["status"], "done")
+        self.assertTrue(job["history_saved"])
+        self.assertFalse(job.get("ephemeral"))
+        self.assertEqual(len(list(config.TRANSCRIPTS_DIR.glob("*.json"))), 1)
+
+    def test_a_dictation_stays_out_of_history_when_asked(self):
+        settings._settings["dictation"]["save_history"] = False
+
+        job = self.run_worker(self.GoodSession(), source="dictation")
+
+        # The text still reaches the helper; nothing reaches the disk.
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(job["result"]["text"], "note to self")
+        self.assertFalse(job["history_saved"])
+        self.assertIsNone(job["history_error"])   # a choice, not a failure
+        self.assertTrue(job["ephemeral"])
+        self.assertEqual(list(config.TRANSCRIPTS_DIR.glob("*.json")), [])
+        self.assertFalse(Path(job["path"]).exists())
+        listed = self.client_job(job["id"])
+        self.assertTrue(listed["ephemeral"])
+        # And it is forgotten soon after, rather than an hour later.
+        with mock.patch.object(jobs, "EPHEMERAL_RETENTION_SECONDS", 0):
+            with jobs.jobs_lock:
+                jobs._prune_jobs_locked()
+        self.assertNotIn(job["id"], jobs.jobs)
+
+    def test_a_dictation_is_tidied_and_an_upload_is_not(self):
+        settings._settings["dictation"]["replacements"] = [{"from": "my email", "to": "sam@example.com"}]
+
+        class ChattySession:
+            def transcribe(self, audio, **kwargs):
+                return FakeResult(text="Send it to my email. New line. Thanks.", language="English")
+
+        dictated = self.run_worker(ChattySession(), source="dictation")
+        uploaded = self.run_worker(ChattySession(), source="upload")
+
+        self.assertEqual(dictated["result"]["text"], "Send it to sam@example.com.\nThanks.")
+        self.assertEqual(uploaded["result"]["text"], "Send it to my email. New line. Thanks.")
+
+    def test_the_history_choice_never_touches_an_upload(self):
+        settings._settings["dictation"]["save_history"] = False
+
+        job = self.run_worker(self.GoodSession(), source="upload")
+
+        self.assertTrue(job["history_saved"])
+        self.assertFalse(job.get("ephemeral"))
+        self.assertEqual(len(list(config.TRANSCRIPTS_DIR.glob("*.json"))), 1)
+
+    def client_job(self, job_id: str) -> dict:
+        return TestClient(api.app, base_url=BASE_URL).get(f"/api/jobs/{job_id}").json()
+
+
+class BackgroundLoadingTests(WorkerTestCase):
+    """Warm-up and idle release happen only in the real server, never here."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(setattr, jobs, "background_loading", False)
+        original = dict(settings._settings["performance"])
+        self.addCleanup(lambda: settings._settings["performance"].update(original))
+
+    def test_warm_up_is_off_outside_the_real_server(self):
+        with mock.patch.object(jobs.executor, "submit") as submit:
+            self.assertIsNone(jobs.warm_up("1.7b"))
+        submit.assert_not_called()
+
+    def test_warm_up_loads_on_the_worker_when_enabled(self):
+        jobs.background_loading = True
+        with mock.patch.object(jobs.executor, "submit") as submit:
+            jobs.warm_up("1.7b")
+        submit.assert_called_once_with(jobs._warm, "1.7b")
+
+    def test_warm_up_respects_the_preload_setting(self):
+        jobs.background_loading = True
+        settings._settings["performance"]["preload_dictation_model"] = False
+        with mock.patch.object(jobs.executor, "submit") as submit:
+            self.assertIsNone(jobs.warm_up("1.7b"))
+        submit.assert_not_called()
+
+    def test_idle_release_waits_for_running_work(self):
+        settings._settings["performance"]["unload_after_minutes"] = 20
+        self.stage_job(status="processing")
+        with mock.patch.object(sessions, "drop_idle") as drop_idle:
+            self.assertEqual(jobs.unload_idle_sessions(), [])
+        drop_idle.assert_not_called()
+
+    def test_idle_release_uses_the_configured_minutes(self):
+        settings._settings["performance"]["unload_after_minutes"] = 20
+        with mock.patch.object(sessions, "drop_idle", return_value=["x"]) as drop_idle:
+            self.assertEqual(jobs.unload_idle_sessions(now=1000.0), ["x"])
+        drop_idle.assert_called_once_with(20 * 60, now=1000.0)
+
+    def test_idle_release_is_off_at_zero(self):
+        settings._settings["performance"]["unload_after_minutes"] = 0
+        with mock.patch.object(sessions, "drop_idle") as drop_idle:
+            self.assertEqual(jobs.unload_idle_sessions(), [])
+        drop_idle.assert_not_called()
+
+    def test_the_download_is_reported_in_the_status_line(self):
+        statuses = []
+        real_update = jobs._update
+
+        def record(target, **fields):
+            statuses.append((fields.get("status"), fields.get("detail"), fields.get("progress")))
+            real_update(target, **fields)
+
+        def fake_download(model_key, progress=None):
+            progress(1_200_000_000, 3_400_000_000)
+
+        class GoodSession:
+            def transcribe(self, audio, **kwargs):
+                return FakeResult()
+
+        sessions.ensure_downloaded.side_effect = fake_download
+        with mock.patch.object(jobs, "_update", side_effect=record):
+            job = self.run_worker(GoodSession())
+
+        self.assertEqual(job["status"], "done")
+        downloading = [s for s in statuses if s[1] and s[1].startswith("Downloading")]
+        self.assertEqual(downloading, [(None, "Downloading model · 1.2 of 3.4 GB", 1_200_000_000 / 3_400_000_000)])
+        # Progress returns to zero for the transcription itself.
+        self.assertIn((None, "Loading model", 0.0), statuses)
 
 
 class QueueControlTests(WorkerTestCase):
@@ -445,8 +606,8 @@ class QueueControlTests(WorkerTestCase):
 
     def setUp(self):
         super().setUp()
-        self.client = TestClient(server.app, base_url=BASE_URL)
-        submit = mock.patch.object(server.executor, "submit")
+        self.client = TestClient(api.app, base_url=BASE_URL)
+        submit = mock.patch.object(jobs.executor, "submit")
         self.submit = submit.start()
         self.addCleanup(submit.stop)
 
@@ -463,13 +624,13 @@ class QueueControlTests(WorkerTestCase):
 
     def test_cancelling_a_queued_job_marks_it_and_removes_the_upload(self):
         job_id = self.stage_job()
-        upload = Path(server.jobs[job_id]["path"])
+        upload = Path(jobs.jobs[job_id]["path"])
         self.assertTrue(upload.exists())
 
         response = self.client.post(f"/api/jobs/{job_id}/cancel")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(server.jobs[job_id]["status"], "cancelled")
+        self.assertEqual(jobs.jobs[job_id]["status"], "cancelled")
         self.assertFalse(upload.exists())
 
     def test_cancelling_is_rejected_once_the_job_has_finished(self):
@@ -488,11 +649,11 @@ class QueueControlTests(WorkerTestCase):
         job_id = self.stage_job()
         self.client.post(f"/api/jobs/{job_id}/cancel")
 
-        with mock.patch.object(server, "get_session") as get_session:
-            server._run_job(job_id)
+        with mock.patch.object(sessions, "get_session") as get_session:
+            jobs._run_job(job_id)
 
         get_session.assert_not_called()
-        self.assertEqual(server.jobs[job_id]["status"], "cancelled")
+        self.assertEqual(jobs.jobs[job_id]["status"], "cancelled")
 
     def test_cancelling_mid_run_stops_at_the_next_chunk_boundary(self):
         job_id = None
@@ -500,15 +661,15 @@ class QueueControlTests(WorkerTestCase):
         class CancellingSession:
             def transcribe(inner, audio, **kwargs):
                 # Cancel from inside the first chunk, as the user would.
-                server.jobs[job_id]["cancelled"].set()
+                jobs.jobs[job_id]["cancelled"].set()
                 return FakeResult(text="partial")
 
         self.install_audio_stubs(chunks=3)
         job_id = self.stage_job()
-        with mock.patch.object(server, "get_session", return_value=CancellingSession()):
-            server._run_job(job_id)
+        with mock.patch.object(sessions, "get_session", return_value=CancellingSession()):
+            jobs._run_job(job_id)
 
-        job = server.jobs[job_id]
+        job = jobs.jobs[job_id]
         self.assertEqual(job["status"], "cancelled")
         self.assertIsNone(job["result"])
         self.assertFalse(Path(job["path"]).exists())
@@ -520,7 +681,7 @@ class QueueControlTests(WorkerTestCase):
 
         body = self.client.post(f"/api/jobs/{job_id}/retry").json()
 
-        retried = server.jobs[body["id"]]
+        retried = jobs.jobs[body["id"]]
         self.assertNotEqual(body["id"], job_id)
         self.assertEqual(retried["filename"], "a.wav")
         self.assertEqual(retried["language"], "Korean")
@@ -528,7 +689,7 @@ class QueueControlTests(WorkerTestCase):
         self.assertEqual(retried["status"], "queued")
         self.assertTrue(Path(retried["path"]).exists())
         self.addCleanup(Path(retried["path"]).unlink, True)
-        self.submit.assert_called_once_with(server._run_job, body["id"])
+        self.submit.assert_called_once_with(jobs._run_job, body["id"])
 
     def test_retry_stages_its_copy_without_holding_the_job_lock(self):
         """The upload can be 4 GB, and every job API waits on that one lock.
@@ -541,14 +702,14 @@ class QueueControlTests(WorkerTestCase):
         def watchful_copy(source, destination):
             # A plain Lock is not reentrant, so this reports the truth even
             # when the endpoint runs on this very thread.
-            acquired = server.jobs_lock.acquire(blocking=False)
+            acquired = jobs.jobs_lock.acquire(blocking=False)
             lock_was_free.append(acquired)
             if acquired:
-                server.jobs_lock.release()
+                jobs.jobs_lock.release()
             Path(destination).write_bytes(Path(source).read_bytes())
 
         job_id = self.stage_job(status="error")
-        with mock.patch.object(server.shutil, "copyfile", watchful_copy):
+        with mock.patch.object(shutil, "copyfile", watchful_copy):
             response = self.client.post(f"/api/jobs/{job_id}/retry")
 
         self.assertEqual(response.status_code, 200)
@@ -565,7 +726,7 @@ class QueueControlTests(WorkerTestCase):
         self.assertEqual(second.status_code, 409)
         self.assertIn("already", second.json()["detail"].lower())
         self.assertEqual(self.submit.call_count, 1)
-        self.assertEqual(server.jobs[job_id]["retried_as"], first.json()["id"])
+        self.assertEqual(jobs.jobs[job_id]["retried_as"], first.json()["id"])
 
     def test_a_second_retry_during_the_staging_copy_is_rejected(self):
         """The copy runs outside the lock, so the claim has to span it.
@@ -587,7 +748,7 @@ class QueueControlTests(WorkerTestCase):
 
         def retry_during_the_copy():
             # Its own client: the two requests are genuinely concurrent.
-            client = TestClient(server.app, base_url=BASE_URL)
+            client = TestClient(api.app, base_url=BASE_URL)
             copying.wait(timeout=5)
             second["status"] = client.post(f"/api/jobs/{job_id}/retry").status_code
             finish_copy.set()
@@ -598,14 +759,14 @@ class QueueControlTests(WorkerTestCase):
         self.addCleanup(helper.join, 5)
         self.addCleanup(finish_copy.set)
         helper.start()
-        with mock.patch.object(server.shutil, "copyfile", slow_copy):
+        with mock.patch.object(shutil, "copyfile", slow_copy):
             first = self.client.post(f"/api/jobs/{job_id}/retry")
         helper.join(timeout=5)
 
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.get("status"), 409)
         self.assertEqual(self.submit.call_count, 1)
-        self.assertEqual(server.retries_staging, set())
+        self.assertEqual(jobs.retries_staging, set())
 
     def test_a_failure_after_the_copy_still_releases_the_retry_claim(self):
         """A claim that outlives its request makes the job un-retryable for
@@ -613,14 +774,14 @@ class QueueControlTests(WorkerTestCase):
         job_id = self.stage_job(status="error")
 
         with mock.patch.object(
-            server, "_prune_jobs_locked", side_effect=PermissionError("read-only")
+            jobs, "_prune_jobs_locked", side_effect=PermissionError("read-only")
         ), self.assertRaises(PermissionError):
             self.client.post(f"/api/jobs/{job_id}/retry")
 
-        self.assertEqual(server.retries_staging, set())
-        self.assertIsNone(server.jobs[job_id].get("retried_as"))
-        self.assertEqual(sorted(server.UPLOAD_DIR.iterdir()),
-                         [Path(server.jobs[job_id]["path"])])
+        self.assertEqual(jobs.retries_staging, set())
+        self.assertIsNone(jobs.jobs[job_id].get("retried_as"))
+        self.assertEqual(sorted(config.UPLOAD_DIR.iterdir()),
+                         [Path(jobs.jobs[job_id]["path"])])
         self.assertEqual(self.client.post(f"/api/jobs/{job_id}/retry").status_code, 200)
 
     def test_a_vanished_upload_asks_for_a_re_upload_even_if_it_vanishes_late(self):
@@ -629,13 +790,13 @@ class QueueControlTests(WorkerTestCase):
         job_id = self.stage_job(status="error")
 
         with mock.patch.object(
-            server.shutil, "copyfile", side_effect=FileNotFoundError("gone")
+            shutil, "copyfile", side_effect=FileNotFoundError("gone")
         ):
             response = self.client.post(f"/api/jobs/{job_id}/retry")
 
         self.assertEqual(response.status_code, 404)
         self.assertIn("upload it again", response.json()["detail"])
-        self.assertIsNone(server.jobs[job_id].get("retried_as"))
+        self.assertIsNone(jobs.jobs[job_id].get("retried_as"))
 
     def test_the_retried_flag_lifts_once_the_retry_is_forgotten(self):
         """The browser hides Retry on this flag, so it has to track the same
@@ -647,7 +808,7 @@ class QueueControlTests(WorkerTestCase):
         self.assertTrue(listed[job_id]["retried"])
         self.assertNotIn("retried_as", listed[job_id])
 
-        server.jobs.pop(retry_id)   # as the remembered-job cap would
+        jobs.jobs.pop(retry_id)   # as the remembered-job cap would
         listed = {job["id"]: job for job in self.client.get("/api/jobs").json()["jobs"]}
         self.assertFalse(listed[job_id]["retried"])
         self.assertEqual(self.client.post(f"/api/jobs/{job_id}/retry").status_code, 200)
@@ -655,17 +816,17 @@ class QueueControlTests(WorkerTestCase):
     def test_a_retry_that_cannot_be_staged_leaves_the_job_retryable(self):
         """A full disk must not consume the one retry the job had."""
         job_id = self.stage_job(status="error")
-        before = sorted(server.UPLOAD_DIR.iterdir())
+        before = sorted(config.UPLOAD_DIR.iterdir())
 
         with mock.patch.object(
-            server.shutil, "copyfile", side_effect=OSError("No space left on device")
+            shutil, "copyfile", side_effect=OSError("No space left on device")
         ):
             failed = self.client.post(f"/api/jobs/{job_id}/retry")
 
         self.assertEqual(failed.status_code, 500)
         self.assertIn("No space left", failed.json()["detail"])
-        self.assertIsNone(server.jobs[job_id].get("retried_as"))
-        self.assertEqual(sorted(server.UPLOAD_DIR.iterdir()), before)
+        self.assertIsNone(jobs.jobs[job_id].get("retried_as"))
+        self.assertEqual(sorted(config.UPLOAD_DIR.iterdir()), before)
         self.assertEqual(self.client.post(f"/api/jobs/{job_id}/retry").status_code, 200)
 
     def test_a_retry_does_not_inherit_the_failure_it_repeats(self):
@@ -676,7 +837,7 @@ class QueueControlTests(WorkerTestCase):
             cancel_requested=True,
         )
 
-        retried = server.jobs[self.client.post(f"/api/jobs/{job_id}/retry").json()["id"]]
+        retried = jobs.jobs[self.client.post(f"/api/jobs/{job_id}/retry").json()["id"]]
 
         self.assertEqual(retried["detail"], "Queued")
         self.assertIsNone(retried.get("timestamps_unavailable"))
@@ -692,16 +853,16 @@ class QueueControlTests(WorkerTestCase):
         body = self.client.post(f"/api/jobs/{job_id}/cancel").json()
 
         self.assertEqual(body["status"], "cancelling")
-        self.assertTrue(server.jobs[job_id]["cancel_requested"])
-        self.assertTrue(server.jobs[job_id]["cancelled"].is_set())
+        self.assertTrue(jobs.jobs[job_id]["cancel_requested"])
+        self.assertTrue(jobs.jobs[job_id]["cancelled"].is_set())
         # Still processing: only the worker may declare it finished.
-        self.assertEqual(server.jobs[job_id]["status"], "processing")
-        self.assertIn("Cancelling", server.jobs[job_id]["detail"])
+        self.assertEqual(jobs.jobs[job_id]["status"], "processing")
+        self.assertIn("Cancelling", jobs.jobs[job_id]["detail"])
 
     def test_a_cancel_that_lands_before_the_final_save_is_honoured(self):
         """The last chunk must not complete a job the user already stopped."""
         job_id = None
-        real_join = server._join_transcript_texts
+        real_join = jobs._join_transcript_texts
 
         class GoodSession:
             def transcribe(inner, audio, **kwargs):
@@ -710,40 +871,40 @@ class QueueControlTests(WorkerTestCase):
         def cancel_then_join(texts, language):
             # Fires after the loop's last cancellation check, in the window
             # between the final chunk and the durable write.
-            server.jobs[job_id]["cancelled"].set()
+            jobs.jobs[job_id]["cancelled"].set()
             return real_join(texts, language)
 
         self.install_audio_stubs(chunks=1)
         job_id = self.stage_job()
-        with mock.patch.object(server, "get_session", return_value=GoodSession()), \
+        with mock.patch.object(sessions, "get_session", return_value=GoodSession()), \
                 mock.patch.object(
-                    server, "_join_transcript_texts", side_effect=cancel_then_join
+                    jobs, "_join_transcript_texts", side_effect=cancel_then_join
                 ):
-            server._run_job(job_id)
+            jobs._run_job(job_id)
 
-        job = server.jobs[job_id]
+        job = jobs.jobs[job_id]
         self.assertEqual(job["status"], "cancelled")
         self.assertIsNone(job["result"])
-        self.assertEqual(list(server.TRANSCRIPTS_DIR.glob("*.json")), [])
+        self.assertEqual(list(config.TRANSCRIPTS_DIR.glob("*.json")), [])
         self.assertFalse(Path(job["path"]).exists())
 
     def test_a_cancel_while_loading_the_model_never_reaches_the_gpu(self):
         """Loading can download gigabytes of weights for a job nobody wants."""
         self.install_audio_stubs(chunks=1)
         job_id = self.stage_job()
-        real_update = server._update
+        real_update = jobs._update
 
         def cancel_once_loading(target, **fields):
             real_update(target, **fields)
             if fields.get("status") == "loading":
-                server.jobs[target]["cancelled"].set()
+                jobs.jobs[target]["cancelled"].set()
 
-        with mock.patch.object(server, "_update", side_effect=cancel_once_loading), \
-                mock.patch.object(server, "get_session") as get_session:
-            server._run_job(job_id)
+        with mock.patch.object(jobs, "_update", side_effect=cancel_once_loading), \
+                mock.patch.object(sessions, "get_session") as get_session:
+            jobs._run_job(job_id)
 
         get_session.assert_not_called()
-        self.assertEqual(server.jobs[job_id]["status"], "cancelled")
+        self.assertEqual(jobs.jobs[job_id]["status"], "cancelled")
 
     def test_a_cancel_while_decoding_audio_is_not_announced_as_transcribing(self):
         """Decoding a 4 GB video is minutes long and cannot be interrupted, so
@@ -754,7 +915,7 @@ class QueueControlTests(WorkerTestCase):
         job_id = None
         transcribed = []
         statuses = []
-        real_update = server._update
+        real_update = jobs._update
 
         class CountingSession:
             def transcribe(inner, audio, **kwargs):
@@ -772,16 +933,16 @@ class QueueControlTests(WorkerTestCase):
         decode = audio_module.load_audio_np
 
         def cancel_while_decoding(path, sr=SAMPLE_RATE):
-            server.jobs[job_id]["cancelled"].set()
+            jobs.jobs[job_id]["cancelled"].set()
             return decode(path, sr)
 
         audio_module.load_audio_np = cancel_while_decoding
-        with mock.patch.object(server, "get_session", return_value=CountingSession()), \
-                mock.patch.object(server, "_update", side_effect=record_status):
-            server._run_job(job_id)
+        with mock.patch.object(sessions, "get_session", return_value=CountingSession()), \
+                mock.patch.object(jobs, "_update", side_effect=record_status):
+            jobs._run_job(job_id)
 
         self.assertEqual(transcribed, [])
-        self.assertEqual(server.jobs[job_id]["status"], "cancelled")
+        self.assertEqual(jobs.jobs[job_id]["status"], "cancelled")
         self.assertNotIn("processing", statuses)
 
     def test_an_error_raised_after_a_cancel_is_reported_as_the_cancel(self):
@@ -791,15 +952,15 @@ class QueueControlTests(WorkerTestCase):
 
         class FailsOnceCancelled:
             def transcribe(inner, audio, **kwargs):
-                server.jobs[job_id]["cancelled"].set()
+                jobs.jobs[job_id]["cancelled"].set()
                 raise RuntimeError("Metal device lost")
 
         self.install_audio_stubs(chunks=1)
         job_id = self.stage_job()
-        with mock.patch.object(server, "get_session", return_value=FailsOnceCancelled()):
-            server._run_job(job_id)
+        with mock.patch.object(sessions, "get_session", return_value=FailsOnceCancelled()):
+            jobs._run_job(job_id)
 
-        job = server.jobs[job_id]
+        job = jobs.jobs[job_id]
         self.assertEqual(job["status"], "cancelled")
         self.assertEqual(job["detail"], "Cancelled")
         self.assertFalse(Path(job["path"]).exists())
@@ -812,22 +973,22 @@ class QueueControlTests(WorkerTestCase):
             detail="Cancelling — finishing the current chunk",
         )
 
-        server._update(job_id, detail="Chunk 3/40", progress=0.075)
+        jobs._update(job_id, detail="Chunk 3/40", progress=0.075)
 
-        self.assertIn("Cancelling", server.jobs[job_id]["detail"])
-        self.assertEqual(server.jobs[job_id]["progress"], 0.075)
+        self.assertIn("Cancelling", jobs.jobs[job_id]["detail"])
+        self.assertEqual(jobs.jobs[job_id]["progress"], 0.075)
         # A terminal update still gets the last word.
-        server._update(job_id, status="cancelled", detail="Cancelled")
-        self.assertEqual(server.jobs[job_id]["detail"], "Cancelled")
+        jobs._update(job_id, status="cancelled", detail="Cancelled")
+        self.assertEqual(jobs.jobs[job_id]["detail"], "Cancelled")
 
     def test_the_worker_ignores_a_job_that_was_already_forgotten(self):
         """Cancelling while queued makes a job terminal, so the 50-job cap can
         evict it before the single worker ever reaches it."""
         self.install_audio_stubs(chunks=1)
         job_id = self.stage_job()
-        server.jobs.pop(job_id)
+        jobs.jobs.pop(job_id)
 
-        server._run_job(job_id)   # must not raise
+        jobs._run_job(job_id)   # must not raise
 
     def test_retry_is_rejected_for_a_running_job(self):
         job_id = self.stage_job(status="processing")
@@ -840,7 +1001,7 @@ class QueueControlTests(WorkerTestCase):
 
     def test_retry_without_the_upload_asks_for_a_fresh_one(self):
         job_id = self.stage_job(status="error")
-        Path(server.jobs[job_id]["path"]).unlink()
+        Path(jobs.jobs[job_id]["path"]).unlink()
 
         response = self.client.post(f"/api/jobs/{job_id}/retry")
 
@@ -859,41 +1020,79 @@ class QueueControlTests(WorkerTestCase):
 
     def test_evicting_a_failed_job_deletes_its_retained_upload(self):
         job_id = self.stage_job(status="error", finished_at=1.0)
-        upload = Path(server.jobs[job_id]["path"])
+        upload = Path(jobs.jobs[job_id]["path"])
 
-        with mock.patch.object(server, "JOB_RETENTION_SECONDS", 0):
-            with server.jobs_lock:
-                server._prune_jobs_locked()
+        with mock.patch.object(config, "JOB_RETENTION_SECONDS", 0):
+            with jobs.jobs_lock:
+                jobs._prune_jobs_locked()
 
-        self.assertNotIn(job_id, server.jobs)
+        self.assertNotIn(job_id, jobs.jobs)
         self.assertFalse(upload.exists())
 
 
 class JobShutdownTests(unittest.TestCase):
     def setUp(self):
-        self.addCleanup(server.stopping.clear)
-        self.addCleanup(server.jobs.clear)
-        self.addCleanup(server.job_futures.clear)
+        self.addCleanup(jobs.stopping.clear)
+        self.addCleanup(jobs.jobs.clear)
+        self.addCleanup(jobs.job_futures.clear)
 
     def test_shutdown_marks_unfinished_jobs_as_failed(self):
         """Queued work must not silently drain after the server is stopped."""
-        with mock.patch.object(server.executor, "submit"), mock.patch.object(
-            server.executor, "shutdown"
+        with mock.patch.object(jobs.executor, "submit"), mock.patch.object(
+            jobs.executor, "shutdown"
         ) as shutdown:
             with mock.patch.dict(
-                server.jobs,
+                jobs.jobs,
                 {
                     "aaaaaaaaaaaa": {"id": "a" * 12, "status": "queued"},
                     "bbbbbbbbbbbb": {"id": "b" * 12, "status": "done"},
                 },
                 clear=True,
             ):
-                with TestClient(server.app, base_url=BASE_URL):
+                with TestClient(api.app, base_url=BASE_URL):
                     pass
-                self.assertEqual(server.jobs["aaaaaaaaaaaa"]["status"], "error")
-                self.assertEqual(server.jobs["bbbbbbbbbbbb"]["status"], "done")
-        self.assertTrue(server.stopping.is_set())
+                self.assertEqual(jobs.jobs["aaaaaaaaaaaa"]["status"], "error")
+                self.assertEqual(jobs.jobs["bbbbbbbbbbbb"]["status"], "done")
+        self.assertTrue(jobs.stopping.is_set())
         shutdown.assert_called_once_with(wait=False, cancel_futures=True)
+
+    def test_shutdown_removes_the_running_and_retained_uploads_too(self):
+        """A quit must not leave the user's media in the temp directory.
+
+        The worker's finally block is not a safe place for this: uvicorn
+        re-raises the caught SIGTERM once the lifespan has run, so on a real
+        quit the process dies before the worker returns from its model call.
+        A failed job's retained copy is equally dead, since the in-memory job
+        it could be retried from is gone.
+        """
+        with TemporaryDirectory() as directory:
+            running = Path(directory) / "running.wav"
+            retained = Path(directory) / "failed.wav"
+            finished = Path(directory) / "done.wav"
+            for path in (running, retained):
+                path.write_bytes(b"RIFF")
+            with mock.patch.object(jobs.executor, "submit"), mock.patch.object(
+                jobs.executor, "shutdown"
+            ):
+                with mock.patch.dict(
+                    jobs.jobs,
+                    {
+                        "a" * 12: {"id": "a" * 12, "status": "processing",
+                                   "path": str(running), "cancelled": Event()},
+                        "b" * 12: {"id": "b" * 12, "status": "error",
+                                   "path": str(retained)},
+                        # Its file is long gone; a missing path must not raise.
+                        "c" * 12: {"id": "c" * 12, "status": "done",
+                                   "path": str(finished)},
+                    },
+                    clear=True,
+                ):
+                    with TestClient(api.app, base_url=BASE_URL):
+                        pass
+                    self.assertFalse(running.exists())
+                    self.assertFalse(retained.exists())
+                    self.assertEqual(jobs.jobs["a" * 12]["status"], "error")
+                    self.assertEqual(jobs.jobs["b" * 12]["status"], "error")
 
     def test_shutdown_removes_upload_for_a_cancelled_queued_future(self):
         started = Event()
@@ -908,9 +1107,9 @@ class JobShutdownTests(unittest.TestCase):
         self.assertTrue(started.wait(timeout=2))
 
         with TemporaryDirectory() as directory, mock.patch.object(
-            server, "UPLOAD_DIR", Path(directory)
-        ), mock.patch.object(server, "executor", temporary_executor):
-            with TestClient(server.app, base_url=BASE_URL) as client:
+            config, "UPLOAD_DIR", Path(directory)
+        ), mock.patch.object(jobs, "executor", temporary_executor):
+            with TestClient(api.app, base_url=BASE_URL) as client:
                 response = client.post(
                     "/api/jobs",
                     data={"model": "1.7b", "language": "English"},
@@ -918,14 +1117,14 @@ class JobShutdownTests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 200)
                 job_id = response.json()["id"]
-                staged = server.UPLOAD_DIR / f"{job_id}.wav"
+                staged = config.UPLOAD_DIR / f"{job_id}.wav"
                 self.assertTrue(staged.exists())
-                self.assertFalse(server.job_futures[job_id].running())
+                self.assertFalse(jobs.job_futures[job_id].running())
 
             self.assertFalse(staged.exists())
-            self.assertEqual(server.jobs[job_id]["status"], "error")
-            self.assertIn("finished_at", server.jobs[job_id])
-            self.assertTrue(server.job_futures.get(job_id) is None)
+            self.assertEqual(jobs.jobs[job_id]["status"], "error")
+            self.assertIn("finished_at", jobs.jobs[job_id])
+            self.assertTrue(jobs.job_futures.get(job_id) is None)
 
         release.set()
         blocker.result(timeout=2)
@@ -969,11 +1168,11 @@ class JobShutdownTests(unittest.TestCase):
             transcripts = root / "transcripts"
             uploads.mkdir()
             transcripts.mkdir()
-            with mock.patch.object(server, "UPLOAD_DIR", uploads), mock.patch.object(
-                server, "TRANSCRIPTS_DIR", transcripts
-            ), mock.patch.object(server, "executor", temporary_executor), mock.patch.object(
-                server, "get_session", return_value=target_session
-            ), mock.patch.dict(
+            with mock.patch.object(config, "UPLOAD_DIR", uploads), mock.patch.object(
+                config, "TRANSCRIPTS_DIR", transcripts
+            ), mock.patch.object(jobs, "executor", temporary_executor), mock.patch.object(
+                sessions, "get_session", return_value=target_session
+            ), mock.patch.object(sessions, "ensure_downloaded"), mock.patch.dict(
                 "sys.modules",
                 {
                     "mlx_qwen3_asr": package,
@@ -981,7 +1180,7 @@ class JobShutdownTests(unittest.TestCase):
                     "mlx_qwen3_asr.chunking": chunking_module,
                 },
             ):
-                with TestClient(server.app, base_url=BASE_URL) as client:
+                with TestClient(api.app, base_url=BASE_URL) as client:
                     response = client.post(
                         "/api/jobs",
                         data={"model": "1.7b", "language": "English"},
@@ -990,14 +1189,14 @@ class JobShutdownTests(unittest.TestCase):
                     self.assertEqual(response.status_code, 200)
                     job_id = response.json()["id"]
                     staged = uploads / f"{job_id}.wav"
-                    worker = server.job_futures[job_id]
+                    worker = jobs.job_futures[job_id]
                     self.assertTrue(started.wait(timeout=2))
 
-                self.assertEqual(server.jobs[job_id]["status"], "error")
+                self.assertEqual(jobs.jobs[job_id]["status"], "error")
                 self.assertEqual(list(transcripts.iterdir()), [])
                 release.set()
                 worker.result(timeout=2)
-                self.assertEqual(server.jobs[job_id]["status"], "error")
+                self.assertEqual(jobs.jobs[job_id]["status"], "error")
                 self.assertEqual(list(transcripts.iterdir()), [])
                 self.assertFalse(staged.exists())
 

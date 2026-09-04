@@ -20,7 +20,7 @@ Qwen Scribe transcribes audio and video with
 GPU. There is no account, API key, or Qwen Scribe cloud service. Audio and
 transcript text stay on the Mac.
 
-> **Project status:** `v0.2.1-beta.1`. Core transcription, history, and
+> **Project status:** `v0.3.0-beta.1`. Core transcription, history, and
 > dictation work. A downloadable beta build exists on the
 > [releases page](https://github.com/VladUZH/qwen-scribe/releases), where its
 > provenance notes state the exact signing and notarization status. An ad-hoc
@@ -46,8 +46,11 @@ transcript text stay on the Mac.
 - Automatic local transcript history with search, reopen, export-all,
   individual delete, and delete-all controls
 - Hold the configured **push-to-talk key** (right Command by default; right
-  Option or right Control if you prefer) in any text field, speak, then
-  release to transcribe locally and paste at the cursor
+  Option, right Control, or the Fn/Globe key if you prefer) in any text
+  field, speak, then release to transcribe locally and paste at the cursor.
+  Or switch to
+  press-to-start, press-to-stop for longer dictation, with the HUD counting
+  the seconds
 - Menu-bar status item with the dictation state, a push-to-talk key picker,
   and explicit restart and quit controls
 - A non-focus-stealing HUD for **Listening**, **Transcribing**, success, and
@@ -63,8 +66,8 @@ transcript text stay on the Mac.
 - Apple Silicon Mac
 - macOS 14 or newer, as required by current
   [MLX releases](https://ml-explore.github.io/mlx/build/html/install.html)
-- Native Python 3.12 or newer, as required by the pinned NumPy in
-  [requirements-lock.txt](requirements-lock.txt)
+- Native Python 3.12 or newer, the floor set in [pyproject.toml](pyproject.toml)
+  and required by the pinned NumPy in [requirements-lock.txt](requirements-lock.txt)
 - `ffmpeg` for non-WAV audio and video — Homebrew (`brew install ffmpeg`) or
   MacPorts (`sudo port install ffmpeg`). The Mac app looks on the standard
   Homebrew and MacPorts paths and then on your login shell's `PATH`, so any
@@ -74,12 +77,16 @@ transcript text stay on the Mac.
 
 The 1.7B model needs roughly 3.4 GB of unified memory and the 0.6B model roughly
 1.2 GB, in addition to normal application overhead. Model weights are not
-included in this repository.
+included in this repository; the first use downloads them, with the progress
+shown on the job. A loaded model is released after 20 minutes without a job,
+and the dictation model is loaded when the app starts so the first dictation is
+quick. Both are settings behind **Set up** on the dictation card.
 
-Word timestamps for Japanese and Korean require the upstream `aligner` extra
-(`nagisa` and `soynlp`), which is not part of the reviewed runtime lock yet.
-Ordinary transcription in those languages is unaffected; leave timestamps off
-until that optional dependency set is deliberately added and reviewed.
+Word timestamps for Japanese and Korean use the `nagisa` and `soynlp`
+tokenizers from the upstream `aligner` extra. The runtime lock has included
+them since v0.2.2, so they install with everything else; if the aligner still
+cannot run on a given file, the transcript is produced and saved without the
+`.srt`, and the interface says why.
 
 ## Build and run the Mac app
 
@@ -96,6 +103,12 @@ from `dist/` to `/Applications` after building:
 
 - `Qwen Scribe.app` starts the server and desktop dictation helper.
 - `Stop Qwen Scribe.app` stops only processes started by Qwen Scribe.
+
+**Launch at Login** in the menu bar registers the app as a login item through
+macOS's own login-item service. The item points at the bundle's location, so
+keep the app in `/Applications`; a rebuild into `dist/` would otherwise leave
+it pointing at a bundle that has moved. macOS may ask you to allow the item
+under **System Settings → General → Login Items** the first time.
 
 An app built locally is ad-hoc signed. If Gatekeeper blocks a downloaded build,
 open it once, then approve it under **System Settings → Privacy & Security →
@@ -126,9 +139,9 @@ browser tab open at all.
 | | |
 | --- | --- |
 | Maximum file size | **4 GB.** The upload is staged in a temporary folder before decoding, so one job briefly needs twice the file's size in free disk space. This is not a model limit — for a longer video, extract the audio track first: `ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 output.wav` |
-| Concurrency | One file at a time. Further uploads queue; the Queue list shows the order, and each entry can be cancelled, a failed one retried without re-uploading. Cancelling a waiting file is immediate; cancelling the one being transcribed takes effect when the current 30-second chunk finishes, since a model call cannot be interrupted part-way |
+| Concurrency | One file at a time. Drop several files at once, or more while one is running, and they queue in order; the Queue list shows that order, and each entry can be cancelled, a failed one retried without re-uploading. Cancelling a waiting file is immediate; cancelling the one being transcribed takes effect when the current 30-second chunk finishes, since a model call cannot be interrupted part-way |
 | Vocabulary hints | Up to 2000 characters, under **More options**. The hint is added to every chunk's prompt, so it is paid for once per chunk of the file |
-| Dictation settings | The push-to-talk key, model, and language live behind **Set up** on the dictation card, and apply within about ten seconds. They are separate from the model and language used for file transcription |
+| Dictation settings | The push-to-talk key, mode, longest recording, model, language, dictionary, and history choice live behind **Set up** on the dictation card, and apply within about ten seconds. In **Hold to talk** the key records while held; in **Press to start, press to stop** a tap starts and the next tap stops, while a press held longer than a tap still works as hold. A recording is stopped on its own at the configured limit, two minutes by default and ten at most. The dictionary is names and terms you dictate often; it is sent with every dictation as the model's vocabulary hint. Switch off **Save dictations to history** to keep dictations out of the saved transcripts entirely. Say "new line" or "new paragraph" on its own, between sentences, to get a break; **Replacements** turn a phrase you say into the text you want pasted, whole words only, so "my email" can become your address. These are separate from the model, language, and vocabulary used for file transcription |
 | Languages | Automatic detection, or any of the fourteen Qwen3-ASR supports. Word timestamps for Japanese and Korean use the tokenizers shipped in `requirements-lock.txt`; if the aligner cannot run, the transcript is still produced and saved, without the `.srt` |
 
 ## Desktop dictation permissions
@@ -137,7 +150,7 @@ Desktop dictation starts with the Mac app. On first launch, allow Qwen Scribe in
 **System Settings → Privacy & Security** for:
 
 - **Microphone** — records while the push-to-talk key is held
-- **Input Monitoring** — detects that modifier while another app is active
+- **Input Monitoring** — detects that key while another app is active
 - **Accessibility** — pastes the finished text into the focused field
 
 After changing Input Monitoring or Accessibility, stop and reopen Qwen Scribe.
@@ -146,7 +159,9 @@ granted.
 
 The helper watches modifier-change events and reacts only to the configured
 push-to-talk key (right Command unless you change it in the web interface or
-the menu bar). It snapshots the pasteboard in memory, pastes the transcription, and
+the menu bar). The Fn key is watched as a physical key through the keyboard's
+own reports, because macOS synthesizes Fn around every arrow and navigation
+key; the menu bar offers it only while a keyboard with an Fn key is attached. It snapshots the pasteboard in memory, pastes the transcription, and
 restores the previous pasteboard if it has not changed. Without Accessibility
 access it cannot insert text at all, so it leaves the transcript on the
 clipboard and reports the failure instead of claiming success. See
@@ -187,6 +202,7 @@ Mac app starts:
 make setup       # create .venv and install the reviewed dependency lock
 make test        # run lightweight API/history tests without model weights
 make check       # tests, source compilation, and publication hygiene
+make lock        # re-resolve pyproject.toml with uv and export requirements-lock.txt
 make app         # build ad-hoc-signed app bundles in dist/
 make package     # create a beta release zip in dist/
 ```
@@ -226,6 +242,16 @@ Push-to-talk ──> native macOS helper ──> temporary WAV ──> same job 
 
 The API serializes GPU jobs to avoid memory contention. Media is staged under a
 random temporary filename and removed when processing finishes.
+
+## Feedback
+
+Testing reports are what drive releases: the whole of v0.2.2 came from one
+person who ran real video files through the app and wrote down what happened.
+If you try Qwen Scribe, please file a
+[testing report](https://github.com/VladUZH/qwen-scribe/issues/new?template=testing_report.yml)
+with what you ran, on which Mac, and what did or did not work. Bugs and
+feature requests have their own templates. Remove private transcript text and
+paths before posting.
 
 ## Contributing and security
 

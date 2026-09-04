@@ -1,17 +1,18 @@
 version: 2
 updates:
-  - package-ecosystem: pip
+  # uv.lock is the resolved dependency set; pyproject.toml holds the direct
+  # pins. Dependabot moves both, and the lock-sync workflow regenerates the
+  # flat requirements-lock.txt the launcher installs. A resolver moves pydantic
+  # and pydantic-core together, which is what the old pip setup could not do.
+  - package-ecosystem: uv
     directory: "/"
     schedule:
-      interval: weekly
+      # Weekly produced more bot pull requests than releases; two of the last
+      # three were closed unmerged. A reviewed monthly bump is enough.
+      interval: monthly
     groups:
       python-runtime:
         patterns: ["*"]
-    ignore:
-      # pydantic pins pydantic-core to an exact version, so the core can only
-      # move when pydantic itself moves. Bumping it on its own resolves to a
-      # lock no pydantic release accepts, and the macOS build fails outright.
-      - dependency-name: "pydantic-core"
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

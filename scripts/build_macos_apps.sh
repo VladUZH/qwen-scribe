@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/scripts/release_versions.sh"
 DIST="${DIST_DIR:-$ROOT/dist}"
-VERSION="${VERSION:-0.2.2}"
+VERSION="${VERSION:-0.3.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 IDENTITY="${CODESIGN_IDENTITY:--}"
 APP="$DIST/Qwen Scribe.app"
@@ -37,6 +37,9 @@ cp "$ROOT/macos/QwenScribe-Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/assets/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/server.py" "$ROOT/requirements.txt" "$ROOT/requirements-lock.txt" "$APP/Contents/Resources/"
 cp -R "$ROOT/static/." "$APP/Contents/Resources/static/"
+cp -R "$ROOT/qwen_scribe" "$APP/Contents/Resources/qwen_scribe"
+# Bytecode from a developer checkout must not ship inside the bundle.
+find "$APP/Contents/Resources/qwen_scribe" -name __pycache__ -type d -prune -exec rm -rf {} +
 
 cp "$ROOT/macos/stop.sh" "$STOP_APP/Contents/MacOS/StopQwenScribe"
 cp "$ROOT/macos/StopQwenScribe-Info.plist" "$STOP_APP/Contents/Info.plist"
@@ -46,7 +49,7 @@ chmod +x "$APP/Contents/Resources/launch-server.sh" "$STOP_APP/Contents/MacOS/St
 clang -fobjc-arc -arch arm64 -mmacosx-version-min=14.0 -Wall -Wextra \
   -Wno-unused-parameter \
   -framework Cocoa -framework ApplicationServices -framework AVFoundation \
-  -framework AudioToolbox \
+  -framework AudioToolbox -framework IOKit -framework ServiceManagement \
   "$ROOT/native/DictationHelper.m" -o "$APP/Contents/MacOS/QwenScribe"
 
 for plist in "$APP/Contents/Info.plist" "$STOP_APP/Contents/Info.plist"; do

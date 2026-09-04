@@ -88,7 +88,7 @@
     color: var(--muted);
     margin-bottom: 6px;
   }
-  select, input[type=text] {
+  select, input[type=text], textarea {
     width: 100%;
     background: var(--panel);
     border: 1px solid var(--line);
@@ -98,12 +98,14 @@
     font-size: 13.5px;
     padding: 9px 10px;
   }
-  select:focus, input[type=text]:focus { border-color: var(--amber); outline: none; }
+  select:focus, input[type=text]:focus, textarea:focus { border-color: var(--amber); outline: none; }
+  textarea { resize: vertical; min-height: 58px; line-height: 1.45; }
   .field-wide { grid-column: 1 / -1; }
   .check { display: flex; align-items: center; gap: 8px; padding-top: 26px; }
   .check input { accent-color: var(--amber); width: 16px; height: 16px; }
   .check label { font-size: 13.5px; cursor: pointer; white-space: nowrap; }
   .check .hint { color: var(--muted); font-size: 12px; }
+  .check.plain { padding-top: 0; }
 
   /* Secondary options — present, but not competing with the primary path */
   .more { margin-top: 14px; }
@@ -310,12 +312,12 @@
     <div class="runtime" id="runtime">Qwen3-ASR · MLX · Metal</div>
   </header>
 
-  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload audio or video file">
+  <div class="drop" id="drop" tabindex="0" role="button" aria-label="Upload audio or video files">
     <h2>Drop audio or video here</h2>
-    <p>or click to choose a file — everything runs locally on this Mac</p>
+    <p>or click to choose files — everything runs locally on this Mac</p>
     <div class="formats" id="formats">wav · mp3 · m4a · mp4 · mov</div>
   </div>
-  <input type="file" id="file" accept="audio/*,video/*,.mkv,.opus,.qta">
+  <input type="file" id="file" multiple accept="audio/*,video/*,.mkv,.opus,.qta">
 
   <div class="options">
     <div class="field">
@@ -355,7 +357,7 @@
     <kbd id="dictationKey">Right ⌘</kbd>
     <div class="dictation-copy">
       <span class="dictation-title">Desktop dictation</span>
-      <span class="dictation-lede">Hold in any text field to record; release to transcribe and paste.</span>
+      <span class="dictation-lede" id="dictationLede">Hold in any text field to record; release to transcribe and paste.</span>
       <p class="dictation-permissions" id="dictationPermissions" hidden></p>
     </div>
     <div class="dictation-status" id="dictationStatus">starting</div>
@@ -375,6 +377,51 @@
     <div class="field">
       <label for="setLanguage">Dictation language</label>
       <select id="setLanguage"></select>
+    </div>
+    <div class="field">
+      <label for="setMode">Mode</label>
+      <select id="setMode"></select>
+    </div>
+    <div class="field">
+      <label for="setMaxSeconds">Longest recording</label>
+      <select id="setMaxSeconds">
+        <option value="60">1 minute</option>
+        <option value="120">2 minutes</option>
+        <option value="180">3 minutes</option>
+        <option value="300">5 minutes</option>
+        <option value="600">10 minutes</option>
+      </select>
+    </div>
+    <div class="field field-wide">
+      <label for="setDictionary">Dictionary</label>
+      <textarea id="setDictionary" maxlength="2000" rows="2" placeholder="Names and terms you dictate often, space separated — sent with every dictation as a vocabulary hint"></textarea>
+    </div>
+    <div class="check plain field-wide">
+      <input type="checkbox" id="setSaveHistory">
+      <label for="setSaveHistory">Save dictations to history <span class="hint">off keeps each one only until it is pasted</span></label>
+    </div>
+    <div class="check plain field-wide">
+      <input type="checkbox" id="setCommands">
+      <label for="setCommands">Spoken commands <span class="hint">“new line” and “new paragraph”, said on their own, become breaks</span></label>
+    </div>
+    <div class="field field-wide">
+      <label for="setReplacements">Replacements</label>
+      <textarea id="setReplacements" rows="3" placeholder="One per line: what you say => what to paste, e.g. my email => sam@example.com"></textarea>
+      <div class="settings-note" id="replacementsNote"></div>
+    </div>
+    <div class="field">
+      <label for="setUnload">Unload idle models after</label>
+      <select id="setUnload">
+        <option value="0">Never</option>
+        <option value="10">10 minutes</option>
+        <option value="20">20 minutes</option>
+        <option value="60">1 hour</option>
+        <option value="240">4 hours</option>
+      </select>
+    </div>
+    <div class="check">
+      <input type="checkbox" id="setPreload">
+      <label for="setPreload">Load the dictation model at launch</label>
     </div>
     <div class="settings-note field-wide" id="settingsNote">Changes apply to desktop dictation within about ten seconds.</div>
   </div>
@@ -429,6 +476,7 @@
   </section>
 </div>
 
+<script src="/static/transcript.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -475,7 +523,31 @@
   let submissionSeq = 0;
   let pollFailures = 0;
   let allowedExtensions = null;
-  let uploadController = null;
+
+  // Files wait here for their turn to be POSTed, in the order they arrived.
+  // One upload at a time, and never abandoned: a second file dropped while a
+  // large first one is still uploading used to abort that upload silently,
+  // which is the opposite of what a queue is for.
+  const pendingUploads = [];
+  let uploading = false;
+
+  function enqueue(files) {
+    const list = [...(files || [])].filter(Boolean);
+    if (!list.length) return;
+    pendingUploads.push(...list);
+    if (!uploading) drainUploads();
+  }
+
+  async function drainUploads() {
+    uploading = true;
+    try {
+      while (pendingUploads.length) {
+        await submit(pendingUploads.shift());
+      }
+    } finally {
+      uploading = false;
+    }
+  }
 
   const stopPolling = () => {
     if (pollTimer) clearTimeout(pollTimer);
@@ -532,19 +604,21 @@
   drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } });
   ["dragover","dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("dragover"); }));
   ["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("dragover"); }));
-  drop.addEventListener("drop", e => { if (e.dataTransfer.files[0]) submit(e.dataTransfer.files[0]); });
+  // Every dropped file is queued, not just the first one.
+  drop.addEventListener("drop", e => enqueue(e.dataTransfer.files));
   // Clearing the input is what makes re-picking the same file fire "change"
-  // again; read the file out first, because blanking it empties .files.
+  // again; read the files out first, because blanking it empties .files.
   $("file").addEventListener("change", e => {
-    const file = e.target.files[0];
+    const files = [...e.target.files];
     e.target.value = "";
-    if (file) submit(file);
+    enqueue(files);
   });
 
+  // Uploads one file and starts polling its job. Called only from
+  // drainUploads, so two never run at once; the detail card follows the most
+  // recent one, and the Queue section below shows the whole batch.
   async function submit(file) {
     const seq = ++submissionSeq;
-    if (uploadController) uploadController.abort();
-    uploadController = null;
     const extension = (file.name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
     currentFile = file;
     lastResult = null;
@@ -584,16 +658,12 @@
     form.append("context", $("context").value);
 
     let res;
-    const controller = new AbortController();
-    uploadController = controller;
     try {
-      res = await fetch("/api/jobs", { method: "POST", body: form, signal: controller.signal });
+      res = await fetch("/api/jobs", { method: "POST", body: form });
     } catch {
-      if (uploadController === controller) uploadController = null;
       if (seq === submissionSeq) fail("Server unreachable. Is server.py still running?");
       return;
     }
-    if (uploadController === controller) uploadController = null;
     if (seq !== submissionSeq) return;   // a newer upload already took over
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -666,9 +736,10 @@
         ? (place === 0 ? "queued — next" : `queued — ${place + (running ? 1 : 0)} ahead`)
         : (job.detail || job.status);
       row.append(name, state);
-      if (job.status === "done") {
+      if (job.status === "done" && !job.ephemeral) {
         // A retried or background job finishes outside the detail panel's
-        // poll loop, so this is the only way to reach its transcript.
+        // poll loop, so this is the only way to reach its transcript. A
+        // dictation kept out of history has nothing to open.
         row.append(queueButton("Open", false, () => openTranscript(job.id)));
       }
       if (!FINISHED.has(job.status)) {
@@ -859,52 +930,9 @@
     }
   }
 
-  // Split after sentence-final punctuation, keeping the mark — and any closing
-  // quote or bracket belonging to it — on the sentence it ends. Two cases,
-  // because Chinese and Japanese are written without spaces: an ideographic
-  // full stop is a boundary even when the next character follows it
-  // immediately, whereas an ASCII period also needs the following whitespace
-  // to tell "end." from "3.5". Requiring the next sentence not to start
-  // lowercase is what keeps "e.g. this" on one line; Qwen3-ASR's punctuation
-  // and capitalization are what make that reliable.
-  // Guards, in order: not right after an initial or a dotted abbreviation
-  // ("J. R. R.", "U.S.", "e.g.", "i.e."), and not after a common title. The
-  // same guards also hold back "p.m. Then" — the price of never breaking a
-  // line mid-abbreviation, which is the more visible mistake.
-  // Assembled with RegExp rather than written as a literal because a literal
-  // is parsed with the script: on an engine without lookbehind the whole
-  // interface would die rather than just this one toggle.
-  // The ideographic alternative must look ahead past a closing mark, not at
-  // any non-space: `\S` lets the closer group backtrack to empty and match
-  // before the quote instead of after it, stranding a lone ” on its own line —
-  // the exact case the group was added for.
-  const CLOSERS = String.raw`["'”’»)\]}」』】）]*`;
-  const NOT_CLOSER = String.raw`[^\s"'”’»)\]}」』】）]`;
-  let SENTENCE_BREAK = null;
-  try {
-    SENTENCE_BREAK = new RegExp(
-      String.raw`(?<=[。！？])(${CLOSERS})(?=${NOT_CLOSER})` +
-      String.raw`|(?<=[.!?。！？…])(?<!\b[A-Za-z]\.)` +
-      String.raw`(?<!\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|No|Fig|Inc|Ltd|Co)\.)` +
-      String.raw`(${CLOSERS})\s+(?=[^a-z])`,
-      "g",
-    );
-  } catch {
-    SENTENCE_BREAK = null;
-  }
-
-  function sentenceLines(text) {
-    if (!SENTENCE_BREAK) return text || "";
-    // Split on a marker of our own rather than on "\n", so a line break the
-    // transcript already contained is left inside its sentence instead of
-    // being treated as another boundary.
-    return (text || "")
-      .replace(SENTENCE_BREAK, "$1$2\u0000")
-      .split("\u0000")
-      .map(sentence => sentence.trim())
-      .filter(Boolean)
-      .join("\n");
-  }
+  // The sentence splitter and the SRT builder live in static/transcript.js,
+  // where Node can test them without a browser.
+  const { sentenceLines, buildSrt } = window.QwenScribeTranscript;
 
   function renderTranscriptBody() {
     const text = lastResult?.text || "";
@@ -966,38 +994,8 @@
   $("btnTxt").addEventListener("click", () =>
     download(`${baseName}.txt`, transcriptText(), "text/plain"));
 
-  // Build SRT cues from word-level segments: break on long pauses,
-  // ~42 chars, or 6 s per cue.
-  // Scripts written without spaces get one segment per character, so joining
-  // with spaces would put a gap between every character.
-  const CJK_LANGUAGES = new Set([
-    "chinese", "zh", "zh-cn", "zh-tw", "cantonese", "yue",
-    "japanese", "ja", "jp", "korean", "ko", "kr", "thai", "th",
-  ]);
-
-  $("btnSrt").addEventListener("click", () => {
-    const words = lastResult?.segments || [];
-    const unspaced = CJK_LANGUAGES.has(String(lastResult?.language || "").toLowerCase());
-    const maxChars = unspaced ? 20 : 42;
-    const cues = [];
-    let cue = null;
-    for (const w of words) {
-      const startNew = !cue
-        || (w.start - cue.end) > 0.9
-        || (cue.text.length + w.text.length) > maxChars
-        || (w.end - cue.start) > 6;
-      if (startNew) { if (cue) cues.push(cue); cue = { start: w.start, end: w.end, text: w.text }; }
-      else { cue.end = w.end; cue.text += (unspaced || w.text.startsWith("'") ? "" : " ") + w.text; }
-    }
-    if (cue) cues.push(cue);
-    const ts = s => {
-      const ms = Math.round(s * 1000);
-      const p = (n, l = 2) => String(n).padStart(l, "0");
-      return `${p(Math.floor(ms/3600000))}:${p(Math.floor(ms/60000)%60)}:${p(Math.floor(ms/1000)%60)},${p(ms%1000,3)}`;
-    };
-    const srt = cues.map((c, i) => `${i+1}\n${ts(c.start)} --> ${ts(c.end)}\n${c.text.trim()}\n`).join("\n");
-    download(`${baseName}.srt`, srt, "text/plain");
-  });
+  $("btnSrt").addEventListener("click", () =>
+    download(`${baseName}.srt`, buildSrt(lastResult?.segments || [], lastResult?.language), "text/plain"));
 
   const formatDate = timestamp => {
     if (!timestamp) return "Unknown date";
@@ -1049,6 +1047,14 @@
   // ── Dictation settings ────────────────────────────────────────────────
   const HOTKEY_LABELS = {};
   const MODEL_LABELS = { "1.7b": "1.7B — accuracy", "0.6b": "0.6B — speed" };
+
+  // The one-line instruction on the card follows the mode, so it never tells
+  // someone to hold a key the helper is waiting for them to tap.
+  function describeMode(mode) {
+    $("dictationLede").textContent = mode === "toggle"
+      ? "Press once in any text field to start recording; press again to transcribe and paste."
+      : "Hold in any text field to record; release to transcribe and paste.";
+  }
   const settingsNote = $("settingsNote");
   const defaultSettingsNote = settingsNote.textContent;
 
@@ -1086,6 +1092,28 @@
     fill($("setHotkey"), body.options.hotkeys, body.dictation.hotkey);
     fill($("setModel"), body.options.models, body.dictation.model);
     fill($("setLanguage"), body.options.languages, body.dictation.language);
+    fill($("setMode"), body.options.modes, body.dictation.mode);
+    $("setMaxSeconds").value = String(body.dictation.max_seconds);
+    describeMode(body.dictation.mode);
+    // Same guard as the vocabulary field: a resync must not overwrite an edit
+    // still inside its debounce.
+    if (dictionarySaveTimer === null) $("setDictionary").value = body.dictation.dictionary || "";
+    $("setSaveHistory").checked = body.dictation.save_history !== false;
+    $("setCommands").checked = body.dictation.spoken_commands !== false;
+    if (replacementsSaveTimer === null) {
+      $("setReplacements").value = (body.dictation.replacements || [])
+        .map(r => `${r.from} => ${r.to}`).join("\n");
+    }
+    const unload = String(body.performance.unload_after_minutes);
+    if (![...$("setUnload").options].some(o => o.value === unload)) {
+      // A value set by hand outside the presets is shown rather than hidden.
+      const o = document.createElement("option");
+      o.value = unload;
+      o.textContent = `${unload} minutes`;
+      $("setUnload").appendChild(o);
+    }
+    $("setUnload").value = unload;
+    $("setPreload").checked = body.performance.preload_dictation_model !== false;
     $("dictationKey").textContent = HOTKEY_LABELS[body.dictation.hotkey] || "Right ⌘";
     // The settings themselves stay folded away; only the way in appears, and
     // only once there is something behind it to show.
@@ -1150,7 +1178,7 @@
   // second's state, and a failed save must not "restore" stale selects.
   let settingsSeq = 0;
 
-  async function saveSetting(key, value) {
+  async function saveSetting(key, value, section = "dictation") {
     const seq = ++settingsSeq;
     settingsNote.classList.remove("error");
     settingsNote.textContent = "Saving…";
@@ -1158,13 +1186,14 @@
       const res = await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dictation: { [key]: value } }),
+        body: JSON.stringify({ [section]: { [key]: value } }),
       });
       if (seq !== settingsSeq) return;
       if (!res.ok) throw new Error();
       const body = await res.json();
       if (seq !== settingsSeq) return;
       $("dictationKey").textContent = HOTKEY_LABELS[body.dictation.hotkey] || $("dictationKey").textContent;
+      describeMode(body.dictation.mode);
       settingsNote.textContent = "Saved. " + defaultSettingsNote;
     } catch {
       if (seq !== settingsSeq) return;
@@ -1175,6 +1204,47 @@
   }
   [["setHotkey", "hotkey"], ["setModel", "model"], ["setLanguage", "language"]].forEach(([id, key]) =>
     $(id).addEventListener("change", e => saveSetting(key, e.target.value)));
+  $("setSaveHistory").addEventListener("change", e => saveSetting("save_history", e.target.checked));
+  $("setMode").addEventListener("change", e => saveSetting("mode", e.target.value));
+  $("setCommands").addEventListener("change", e => saveSetting("spoken_commands", e.target.checked));
+  // "what you say => what to paste", one per line. A line without the arrow
+  // is reported rather than silently dropped, and nothing is saved until
+  // every line parses.
+  let replacementsSaveTimer = null;
+  function parseReplacements(text) {
+    const rules = [];
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      const at = line.indexOf("=>");
+      const from = at < 0 ? "" : line.slice(0, at).trim();
+      if (at < 0 || !from) return { error: `Line ${i + 1} needs the form: what you say => what to paste` };
+      rules.push({ from, to: line.slice(at + 2).trim() });
+    }
+    return { rules };
+  }
+  $("setReplacements").addEventListener("input", () => {
+    clearTimeout(replacementsSaveTimer);
+    replacementsSaveTimer = setTimeout(() => {
+      replacementsSaveTimer = null;
+      const parsed = parseReplacements($("setReplacements").value);
+      $("replacementsNote").textContent = parsed.error || "";
+      if (!parsed.error) saveSetting("replacements", parsed.rules);
+    }, 600);
+  });
+  $("setUnload").addEventListener("change", e => saveSetting("unload_after_minutes", Number(e.target.value), "performance"));
+  $("setPreload").addEventListener("change", e => saveSetting("preload_dictation_model", e.target.checked, "performance"));
+  // The server wants a number of seconds, not the select's string.
+  $("setMaxSeconds").addEventListener("change", e => saveSetting("max_seconds", Number(e.target.value)));
+  let dictionarySaveTimer = null;
+  $("setDictionary").addEventListener("input", () => {
+    clearTimeout(dictionarySaveTimer);   // one write per pause, not per keystroke
+    dictionarySaveTimer = setTimeout(() => {
+      dictionarySaveTimer = null;
+      saveSetting("dictionary", $("setDictionary").value);
+    }, 600);
+  });
 
   // ── Saved transcripts ─────────────────────────────────────────────────
   let searchTimer = null;
@@ -1345,6 +1415,7 @@
       // The hotkey can also change from the menu bar; the status poll keeps
       // the badge honest either way.
       if (state.shortcut) $("dictationKey").textContent = state.shortcut;
+      if (state.mode) describeMode(state.mode);
     } catch {
       status.textContent = "not running";
       status.classList.remove("ready");

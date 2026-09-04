@@ -8,7 +8,7 @@ from unittest import mock
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-import server
+from qwen_scribe import api, config, dictation, history, jobs
 
 # The server only trusts loopback Host headers, so the test client has to look
 # like a real local browser rather than TestClient's default "testserver".
@@ -16,7 +16,7 @@ BASE_URL = "http://127.0.0.1:8990"
 
 
 def local_client(**kwargs) -> TestClient:
-    return TestClient(server.app, base_url=BASE_URL, **kwargs)
+    return TestClient(api.app, base_url=BASE_URL, **kwargs)
 
 
 class TranscriptHistoryTests(unittest.TestCase):
@@ -27,7 +27,7 @@ class TranscriptHistoryTests(unittest.TestCase):
         transcripts.mkdir()
         # Restore the module global afterwards; leaving it pointed at a deleted
         # temp directory would corrupt every later test in the process.
-        patcher = mock.patch.object(server, "TRANSCRIPTS_DIR", transcripts)
+        patcher = mock.patch.object(config, "TRANSCRIPTS_DIR", transcripts)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -49,32 +49,32 @@ class TranscriptHistoryTests(unittest.TestCase):
             "segments": None,
             "truncated": False,
         }
-        server._save_transcript(job, result, finished_at)
+        history._save_transcript(job, result, finished_at)
 
     def test_save_list_read_and_delete_transcript(self):
         self.transcript("aaaaaaaaaaaa", 100, "Grüezi Zürich")
         self.transcript("bbbbbbbbbbbb", 200, "Latest transcript")
 
-        summaries = server.list_transcripts()["transcripts"]
+        summaries = api.list_transcripts()["transcripts"]
         self.assertEqual([item["id"] for item in summaries], ["bbbbbbbbbbbb", "aaaaaaaaaaaa"])
         self.assertEqual(summaries[1]["preview"], "Grüezi Zürich")
         self.assertEqual(summaries[1]["word_count"], 2)
         self.assertEqual(summaries[1]["duration_seconds"], 10)
 
-        saved = server.get_transcript("aaaaaaaaaaaa")
+        saved = api.get_transcript("aaaaaaaaaaaa")
         self.assertEqual(saved["result"]["text"], "Grüezi Zürich")
 
-        response = server.delete_transcript("aaaaaaaaaaaa")
+        response = api.delete_transcript("aaaaaaaaaaaa")
         self.assertEqual(response.status_code, 204)
-        self.assertFalse((server.TRANSCRIPTS_DIR / "aaaaaaaaaaaa.json").exists())
+        self.assertFalse((config.TRANSCRIPTS_DIR / "aaaaaaaaaaaa.json").exists())
 
     def test_delete_all_ignores_damaged_history_file(self):
         self.transcript("cccccccccccc", 100, "One")
-        (server.TRANSCRIPTS_DIR / "dddddddddddd.json").write_text("not json", encoding="utf-8")
+        (config.TRANSCRIPTS_DIR / "dddddddddddd.json").write_text("not json", encoding="utf-8")
 
-        self.assertEqual(len(server.list_transcripts()["transcripts"]), 1)
-        self.assertEqual(server.delete_all_transcripts(), {"deleted": 2})
-        self.assertEqual(list(server.TRANSCRIPTS_DIR.glob("*.json")), [])
+        self.assertEqual(len(api.list_transcripts()["transcripts"]), 1)
+        self.assertEqual(api.delete_all_transcripts(), {"deleted": 2})
+        self.assertEqual(list(config.TRANSCRIPTS_DIR.glob("*.json")), [])
 
     def test_damaged_history_files_do_not_break_the_list(self):
         """One unreadable file must cost its own row, not the whole history."""
@@ -104,9 +104,9 @@ class TranscriptHistoryTests(unittest.TestCase):
                 '"finished_at": 1e999}',
             ),
         ]:
-            (server.TRANSCRIPTS_DIR / name).write_text(body, encoding="utf-8")
+            (config.TRANSCRIPTS_DIR / name).write_text(body, encoding="utf-8")
 
-        summaries = server.list_transcripts()["transcripts"]
+        summaries = api.list_transcripts()["transcripts"]
         listed = {item["id"] for item in summaries}
         self.assertIn("aaaaaaaaaaaa", listed)
         # The two files that are objects degrade to empty text rather than 500.
@@ -152,16 +152,16 @@ class TranscriptHistoryTests(unittest.TestCase):
 
     def test_delete_all_removes_orphaned_partial_writes(self):
         self.transcript("aaaaaaaaaaaa", 100, "One")
-        (server.TRANSCRIPTS_DIR / "bbbbbbbbbbbb.json.tmp").write_text("{}", encoding="utf-8")
-        self.assertEqual(server.delete_all_transcripts(), {"deleted": 2})
-        self.assertEqual(list(server.TRANSCRIPTS_DIR.iterdir()), [])
+        (config.TRANSCRIPTS_DIR / "bbbbbbbbbbbb.json.tmp").write_text("{}", encoding="utf-8")
+        self.assertEqual(api.delete_all_transcripts(), {"deleted": 2})
+        self.assertEqual(list(config.TRANSCRIPTS_DIR.iterdir()), [])
 
     def test_save_transcript_leaves_no_partial_file_when_writing_fails(self):
         job = {"id": "aaaaaaaaaaaa", "filename": "x.wav"}
-        with mock.patch.object(server.json, "dump", side_effect=OSError("disk full")):
+        with mock.patch.object(json, "dump", side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
-                server._save_transcript(job, {"text": "hi"}, 100)
-        self.assertEqual(list(server.TRANSCRIPTS_DIR.iterdir()), [])
+                history._save_transcript(job, {"text": "hi"}, 100)
+        self.assertEqual(list(config.TRANSCRIPTS_DIR.iterdir()), [])
 
     def test_search_matches_filename_and_full_text_case_insensitively(self):
         self.transcript("aaaaaaaaaaaa", 100, "Revenue forecast for Berlin")
@@ -190,7 +190,7 @@ class TranscriptHistoryTests(unittest.TestCase):
 
         self.transcript("aaaaaaaaaaaa", 100, "First transcript")
         self.transcript("bbbbbbbbbbbb", 200, "Second transcript")
-        (server.TRANSCRIPTS_DIR / "cccccccccccc.json").write_text("damaged{", encoding="utf-8")
+        (config.TRANSCRIPTS_DIR / "cccccccccccc.json").write_text("damaged{", encoding="utf-8")
 
         response = local_client().get("/api/transcripts/export")
         self.assertEqual(response.status_code, 200)
@@ -208,52 +208,52 @@ class TranscriptHistoryTests(unittest.TestCase):
     def test_rejects_unsafe_transcript_id(self):
         for unsafe in ("../../secrets", "AAAAAAAAAAAA", "aaaaaaaaaaa", "aaaaaaaaaaaaa", ""):
             with self.assertRaises(HTTPException) as error:
-                server.get_transcript(unsafe)
+                api.get_transcript(unsafe)
             self.assertEqual(error.exception.status_code, 404)
 
     def test_deleting_a_missing_transcript_is_a_404_not_a_crash(self):
         with self.assertRaises(HTTPException) as error:
-            server.delete_transcript("aaaaaaaaaaaa")
+            api.delete_transcript("aaaaaaaaaaaa")
         self.assertEqual(error.exception.status_code, 404)
 
     def test_deleting_a_transcript_also_forgets_its_finished_job(self):
         """Otherwise GET /api/jobs/{id} keeps serving text the user deleted."""
         self.transcript("aaaaaaaaaaaa", 100, "Secret")
         with mock.patch.dict(
-            server.jobs,
+            jobs.jobs,
             {"aaaaaaaaaaaa": {"id": "aaaaaaaaaaaa", "status": "done", "result": {"text": "Secret"}}},
             clear=True,
         ):
-            server.delete_transcript("aaaaaaaaaaaa")
-            self.assertNotIn("aaaaaaaaaaaa", server.jobs)
+            api.delete_transcript("aaaaaaaaaaaa")
+            self.assertNotIn("aaaaaaaaaaaa", jobs.jobs)
 
     def test_running_jobs_are_never_evicted(self):
         old = time.time() - 10 * 60 * 60
         with mock.patch.dict(
-            server.jobs,
+            jobs.jobs,
             {
                 "aaaaaaaaaaaa": {"id": "a" * 12, "status": "processing", "created_at": old},
                 "bbbbbbbbbbbb": {"id": "b" * 12, "status": "done", "finished_at": old},
             },
             clear=True,
         ):
-            with server.jobs_lock:
-                server._prune_jobs_locked()
-            self.assertIn("aaaaaaaaaaaa", server.jobs)
-            self.assertNotIn("bbbbbbbbbbbb", server.jobs)
+            with jobs.jobs_lock:
+                jobs._prune_jobs_locked()
+            self.assertIn("aaaaaaaaaaaa", jobs.jobs)
+            self.assertNotIn("bbbbbbbbbbbb", jobs.jobs)
 
     def test_job_store_stays_bounded(self):
         now = time.time()
         crowd = {
             f"{index:012x}": {"id": f"{index:012x}", "status": "done", "finished_at": now - index}
-            for index in range(server.MAX_REMEMBERED_JOBS + 25)
+            for index in range(config.MAX_REMEMBERED_JOBS + 25)
         }
-        with mock.patch.dict(server.jobs, crowd, clear=True):
-            with server.jobs_lock:
-                server._prune_jobs_locked()
-            self.assertEqual(len(server.jobs), server.MAX_REMEMBERED_JOBS)
+        with mock.patch.dict(jobs.jobs, crowd, clear=True):
+            with jobs.jobs_lock:
+                jobs._prune_jobs_locked()
+            self.assertEqual(len(jobs.jobs), config.MAX_REMEMBERED_JOBS)
             # The most recent ones are the ones a browser might still poll.
-            self.assertIn(f"{0:012x}", server.jobs)
+            self.assertIn(f"{0:012x}", jobs.jobs)
 
     def test_job_store_is_pruned_as_queued_jobs_finish(self):
         now = time.time()
@@ -263,30 +263,30 @@ class TranscriptHistoryTests(unittest.TestCase):
                 "status": "queued",
                 "created_at": now - index,
             }
-            for index in range(server.MAX_REMEMBERED_JOBS + 25)
+            for index in range(config.MAX_REMEMBERED_JOBS + 25)
         }
-        with mock.patch.dict(server.jobs, crowd, clear=True):
+        with mock.patch.dict(jobs.jobs, crowd, clear=True):
             for job_id in list(crowd):
-                server._update(job_id, status="done")
-            self.assertEqual(len(server.jobs), server.MAX_REMEMBERED_JOBS)
+                jobs._update(job_id, status="done")
+            self.assertEqual(len(jobs.jobs), config.MAX_REMEMBERED_JOBS)
 
     def test_newly_failed_long_job_gets_a_full_retention_window(self):
         old = time.time() - 10 * 60 * 60
         with mock.patch.dict(
-            server.jobs,
+            jobs.jobs,
             {"aaaaaaaaaaaa": {"id": "a" * 12, "status": "processing", "created_at": old}},
             clear=True,
         ):
-            server._update("aaaaaaaaaaaa", status="error", detail="late failure")
-            self.assertIn("aaaaaaaaaaaa", server.jobs)
-            self.assertGreater(server.jobs["aaaaaaaaaaaa"]["finished_at"], old)
+            jobs._update("aaaaaaaaaaaa", status="error", detail="late failure")
+            self.assertIn("aaaaaaaaaaaa", jobs.jobs)
+            self.assertGreater(jobs.jobs["aaaaaaaaaaaa"]["finished_at"], old)
 
 
 class DictationStatusTests(unittest.TestCase):
     def setUp(self):
         self.client = local_client()
         self.addCleanup(
-            lambda: server.dictation_state.update(
+            lambda: dictation.dictation_state.update(
                 last_seen=0.0, accessibility=None, input_monitoring=None, microphone=None
             )
         )
@@ -306,7 +306,7 @@ class DictationStatusTests(unittest.TestCase):
         self.assertTrue(status["microphone"])
 
     def test_status_goes_unavailable_when_the_helper_stops_reporting(self):
-        server.dictation_state.update(
+        dictation.dictation_state.update(
             last_seen=time.time() - 31, accessibility=True,
             input_monitoring=True, microphone=True,
         )
@@ -346,9 +346,9 @@ class LocalRequestSecurityTests(unittest.TestCase):
         self.assertIn("frame-ancestors 'none'", response.headers["content-security-policy"])
 
     def test_config_advertises_the_formats_the_server_actually_accepts(self):
-        config = self.client.get("/api/config").json()
-        self.assertEqual(config["extensions"], sorted(server.ALLOWED_SUFFIXES))
-        self.assertIn(config["default_model"], config["models"])
+        body = self.client.get("/api/config").json()
+        self.assertEqual(body["extensions"], sorted(config.ALLOWED_SUFFIXES))
+        self.assertIn(body["default_model"], body["models"])
 
 
 if __name__ == "__main__":
