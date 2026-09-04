@@ -7,11 +7,14 @@ sends one as the native helper would (a dictation with a dictionary hint),
 and writes the transcripts, the audio, and a Markdown summary to --out. Exits
 non-zero when a check fails. Standard library only.
 
-The runner's virtual GPU occasionally times out a Metal command buffer, after
-which the server process ignores every later one. Given --restart-command,
-the checks stop and relaunch the server the way the apps do and retry the
-sample once per run, which is what a person would do at the Mac; a second
-failure is reported as one.
+The runner's virtual GPU is slow, and the first decode in a server process
+is the heavy one: on a bad host it trips the Metal command-buffer watchdog.
+Later decodes in the same process are fine whether or not that first one
+was, so the checks warm the GPU with a two-word clip first and tolerate a
+timeout there. A timeout on a real sample after that is retried once, after
+stopping and relaunching the server the way the apps do (--restart-command),
+which is what a person would do at the Mac; a second failure is reported as
+one.
 
 This is what the maintainer would do by hand before a release, minus the
 parts that need a person at the keyboard: granting Microphone, Input
@@ -214,8 +217,31 @@ def main() -> int:
     voices = installed_voices()
     record("PASS" if voices else "FAIL", "macOS speech voices are installed", f"{len(voices)} voices")
 
+    # The first decode in a fresh process is where the runner's GPU trips its
+    # watchdog; let a two-word clip take that hit, and the download report.
+    english_voice = pick_voice(voices, SAMPLES[0][2], "en")
+    if english_voice is not None:
+        wav = out / "audio" / "warm-up.wav"
+        seconds = synthesise(english_voice, "Ready now.", wav)
+        try:
+            job, seen = wait_for_job(upload(wav, "warm-up.wav", {"model": args.model, "language": "English",
+                                                                  "timestamps": "false"}), args.timeout)
+        except TimeoutError as exc:
+            record("FAIL", "warm-up decode finished", str(exc))
+        else:
+            downloads = [d for _, _, d in seen if d.startswith("Downloading model")]
+            record("PASS", f"warm-up: first run {'reported the download' if downloads else 'used cached weights'}",
+                   downloads[-1] if downloads else "")
+            elapsed = (job.get("finished_at") or 0) - (job.get("started_at") or 0)
+            if job["status"] == "done":
+                record("PASS", f"warm-up: {seconds:.1f}s clip decoded, GPU kernels ready", f"{elapsed:.1f}s")
+            elif gpu_hiccup(job):
+                record("WARN", "warm-up: the runner's GPU watchdog tripped on the first decode; the samples follow",
+                       (job.get("detail") or "")[:120])
+            else:
+                record("FAIL", "warm-up decode finished", job.get("detail", ""))
+
     timings: list[str] = []
-    first = True
     for name, locale, preferred, text, expected_language in SAMPLES:
         voice = pick_voice(voices, preferred, locale)
         if voice is None:
@@ -246,11 +272,6 @@ def main() -> int:
         else:
             segments = result.get("segments") or []
             record("PASS" if segments else "FAIL", f"{name}: word timestamps produced", f"{len(segments)} words")
-        downloads = [d for _, _, d in seen if d.startswith("Downloading model")]
-        if first:
-            record("PASS", f"{name}: first run {'reported the download' if downloads else 'used cached weights'}",
-                   downloads[-1] if downloads else "")
-            first = False
         loading_to_done = next((t for t, s, _ in seen if s == "processing"), None)
         elapsed = (job.get("finished_at") or 0) - (job.get("started_at") or 0)
         timings.append(f"| {name} | {seconds:.1f}s | {loading_to_done or 0:.1f}s | {elapsed:.1f}s | "

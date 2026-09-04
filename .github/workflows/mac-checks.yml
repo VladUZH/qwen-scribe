@@ -82,9 +82,10 @@ jobs:
 
       - name: Transcribe synthesised speech through the real model
         env:
-          # The runner's virtual GPU occasionally times out a Metal command
-          # buffer and the server then ignores every later one. The checks
-          # stop and relaunch the server the way the apps do and retry once.
+          # The runner's virtual GPU is slow and the first decode in a process
+          # can trip the Metal watchdog; the checks warm it with a two-word
+          # clip first. A timeout on a real sample after that stops and
+          # relaunches the server the way the apps do and retries once.
           QS_NO_OPEN: "1"
           RESTART: >-
             "dist/Stop Qwen Scribe.app/Contents/MacOS/StopQwenScribe";
