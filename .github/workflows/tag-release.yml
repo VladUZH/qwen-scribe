@@ -1,0 +1,83 @@
+name: Tag release
+
+# Cuts a release tag from GitHub alone, with no terminal at hand. Two ways in:
+# a commit on main whose subject is "Release v0.3.0-beta.1" (a squash-merged
+# pull request with that title, or a direct commit), or the Run workflow
+# button with the version as input. The job checks the version against the
+# app bundle and pyproject, refuses a tag that already exists, pushes the tag,
+# and starts the Release workflow on it, which builds the apps and drafts the
+# release for a person to review and publish. Nothing becomes public here.
+#
+# The tag is pushed with the workflow's own token, and GitHub does not start
+# tag-triggered workflows for pushes made by that token, so the Release
+# workflow is dispatched explicitly instead of relying on its tag trigger.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Tag to create, such as v0.3.1-beta.1; must match the bundle version"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  tag:
+    name: Tag and start the release build
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'Release v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Determine and check the tag
+        id: tag
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_VERSION"
+          else
+            # "Release v0.3.0-beta.1 (#22)" after a squash merge, or without the suffix.
+            SUBJECT="$(printf '%s\n' "$HEAD_MESSAGE" | head -n 1)"
+            TAG="$(printf '%s' "$SUBJECT" | sed -E -n 's/^Release (v[^ ]+)( \(#[0-9]+\))?$/\1/p')"
+          fi
+          source scripts/release_versions.sh
+          if [ -z "$TAG" ] || [ "${TAG#v}" = "$TAG" ] || ! qs_valid_release_version "${TAG#v}"; then
+            echo "Not a release tag: '$TAG'. Expected the form v0.3.0 or v0.3.0-beta.1." >&2
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          VERSION="${VERSION%%-*}"
+          BUNDLE="$(python3 -c 'import plistlib, sys; print(plistlib.load(open(sys.argv[1], "rb"))["CFBundleShortVersionString"])' macos/QwenScribe-Info.plist)"
+          PROJECT="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "$VERSION" != "$BUNDLE" ] || [ "$VERSION" != "$PROJECT" ]; then
+            echo "Tag $TAG names version $VERSION, but the bundle is $BUNDLE and pyproject is $PROJECT." >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists; a released archive is never rebuilt." >&2
+            exit 1
+          fi
+          echo "Tagging $GITHUB_SHA as $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Push the tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
+      - name: Start the release build on the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh workflow run release.yml --ref "$TAG"
+          echo "Release workflow started on $TAG; it drafts the release when it finishes." >> "$GITHUB_STEP_SUMMARY"
