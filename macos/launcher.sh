@@ -40,9 +40,9 @@ RUNTIME_DIR="$APP_SUPPORT/runtime"
 VENV_DIR="$RUNTIME_DIR/.venv"
 PIDFILE="$APP_SUPPORT/server.pid"
 RESOURCES_DIR="$(cd "$(dirname "$0")" && pwd)"
-# Contents/Frameworks/Python when the app ships a runtime; absent when it was
-# built with BUNDLE_PYTHON=0, and absent for ./run.sh, which has its own venv.
-BUNDLED_PYTHON="$(cd "$RESOURCES_DIR/.." 2>/dev/null && pwd)/Frameworks/Python/bin/python3"
+# The interpreter the app ships with; absent when it was built with
+# BUNDLE_PYTHON=0, and absent for ./run.sh, which has its own environment.
+BUNDLED_PYTHON="$RESOURCES_DIR/Python/bin/python3"
 
 dialog() {
   /usr/bin/osascript - "$1" >/dev/null 2>&1 << 'APPLESCRIPT'

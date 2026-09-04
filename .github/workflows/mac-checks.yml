@@ -252,14 +252,14 @@ jobs:
           make app
           echo "### App size" >> "$GITHUB_STEP_SUMMARY"
           du -sh "dist/Qwen Scribe.app" | tee -a "$GITHUB_STEP_SUMMARY"
-          du -sh "dist/Qwen Scribe.app/Contents/Frameworks/Python" | tee -a "$GITHUB_STEP_SUMMARY"
+          du -sh "dist/Qwen Scribe.app/Contents/Resources/Python" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: The signature has to hold with the runtime nested inside it
         # The week's gating check: macOS reports a bundle whose nested Mach-O
         # files are unsigned as damaged, and the user sees that, not a log.
         run: |
           codesign --verify --deep --strict --verbose=2 "dist/Qwen Scribe.app"
-          codesign -dv "dist/Qwen Scribe.app/Contents/Frameworks/Python/bin/python3.12" 2>&1 | grep -i "signature"
+          codesign -dv "dist/Qwen Scribe.app/Contents/Resources/Python/bin/python3.12" 2>&1 | grep -i "signature"
 
       - name: Hide every other Python from the launcher
         run: |
@@ -301,7 +301,7 @@ jobs:
         run: |
           config="$HOME/Library/Application Support/Qwen Scribe/runtime/.venv/pyvenv.cfg"
           cat "$config"
-          grep -q "Qwen Scribe.app/Contents/Frameworks/Python" "$config"
+          grep -q "Qwen Scribe.app/Contents/Resources/Python" "$config"
           "$HOME/Library/Application Support/Qwen Scribe/runtime/.venv/bin/python" -c \
             'import mlx.core, sys; print("mlx loads under", sys.version)'
 

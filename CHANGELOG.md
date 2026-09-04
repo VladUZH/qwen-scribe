@@ -9,7 +9,7 @@ details when clearly documented.
 ### Added
 
 - The app carries its own Python. A Mac with no Python installed can now run
-  it: `Contents/Frameworks/Python` holds a pinned, SHA-256-verified
+  it: `Contents/Resources/Python` holds a pinned, SHA-256-verified
   `python-build-standalone` 3.12 build, and the launcher makes the private
   environment from that interpreter rather than hunting for one and failing
   with a dialog. Python is still needed to run from source, and

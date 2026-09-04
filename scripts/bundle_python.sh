@@ -67,6 +67,13 @@ rm -rf \
   "$DEST/share/man" \
   "$DEST/bin/idle"* "$DEST/bin/2to3"*
 
+# Console scripts nothing here calls: the launcher runs `python -m venv` and
+# then `python -m pip`, and the environment it makes gets its own pip from
+# the ensurepip wheel. Removing them keeps a handful of shebang scripts out
+# of the bundle; the ones inside the stdlib have to stay, which is why the
+# runtime is sealed as resources rather than signed as nested code.
+rm -f "$DEST/bin/pip"* "$DEST/bin/pydoc"* "$DEST"/bin/*-config
+
 if [[ ! -x "$DEST/bin/python3" ]]; then
   echo "The bundled runtime has no bin/python3 — the archive layout changed." >&2
   exit 1

@@ -48,13 +48,21 @@ bundle's version.
 ## The bundled Python runtime
 
 `make app` puts a Python 3.12 runtime inside the bundle at
-`Contents/Frameworks/Python`, so the app needs no Python on the Mac it runs
+`Contents/Resources/Python`, so the app needs no Python on the Mac it runs
 on. `scripts/bundle_python.sh` holds the pin: a `python-build-standalone`
 `install_only` build for `aarch64-apple-darwin`, named by version and
 verified against a SHA-256 that is committed here. A mismatch stops the
 build. The archive is cached under `.build/cache`, and Tcl/Tk is removed
 from it; nothing else is. Expect the app to grow by roughly 25 MB
 compressed.
+
+It sits in `Resources` rather than `Frameworks` because codesign treats
+everything under `Frameworks` as nested code and wants a signature for every
+file it thinks is executable — which includes the shebang lines the stdlib
+carries on `pdb.py`, `tarfile.py` and two dozen others. Under `Resources`
+they are sealed by hash into the app's own signature instead. If notarization
+later insists on a framework layout, the runtime has to be repackaged as a
+real `Python.framework`; the release dry run is where that will show up.
 
 Every Mach-O file inside that runtime is signed before the bundle is, and
 `codesign --verify --deep --strict` runs on the result: macOS reports a

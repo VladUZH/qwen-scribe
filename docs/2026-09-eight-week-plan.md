@@ -368,7 +368,12 @@ project and fatal to the people who download it.
 - [x] `feat/bundled-python`: `scripts/build_macos_apps.sh` downloads a
       pinned, SHA-256-verified `python-build-standalone` 3.12 `install_only`
       build for `aarch64-apple-darwin` into
-      `Contents/Frameworks/Python`, signs every Mach-O inside it (the
+      `Contents/Resources/Python` — not `Frameworks`, where the first CI run
+      showed codesign demanding a signature for every file it reads as
+      nested code, which includes the shebang lines the stdlib carries on
+      `pdb.py`, `tarfile.py` and two dozen more; under `Resources` they are
+      sealed by hash into the app's own signature instead — signs every
+      Mach-O inside it (the
       interpreter, `libpython`, stdlib extension modules) inside-out with
       the same identity as the rest of the bundle, ad-hoc until a Developer
       ID exists, and the launcher prefers that interpreter to create the

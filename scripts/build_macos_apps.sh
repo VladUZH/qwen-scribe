@@ -35,8 +35,15 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/static" "$STOP_APP/Conte
 # The app carries its own interpreter, so a Mac needs no Python of its own.
 # BUNDLE_PYTHON=0 builds without it — offline, and quick for a local edit —
 # and the launcher then falls back to looking for a system Python as before.
+#
+# In Resources rather than Frameworks: codesign treats everything under
+# Frameworks as nested code and demands a signature for each file it thinks
+# is executable, which includes the shebang lines on stdlib modules like
+# pdb.py and tarfile.py. Under Resources those are sealed by hash into the
+# app's own signature, which is the protection that actually matters, and
+# the Mach-O files inside are still signed individually below.
 if [[ "${BUNDLE_PYTHON:-1}" == "1" ]]; then
-  "$ROOT/scripts/bundle_python.sh" "$APP/Contents/Frameworks/Python"
+  "$ROOT/scripts/bundle_python.sh" "$APP/Contents/Resources/Python"
 fi
 
 cp "$ROOT/macos/launcher.sh" "$APP/Contents/Resources/launch-server.sh"
@@ -62,7 +69,7 @@ clang -fobjc-arc -arch arm64 -mmacosx-version-min=14.0 -Wall -Wextra \
 # Nested code is signed before the bundle that seals it: macOS reports an app
 # whose inner Mach-O files are unsigned, or signed with another identity, as
 # damaged rather than as a signing mistake.
-RUNTIME="$APP/Contents/Frameworks/Python"
+RUNTIME="$APP/Contents/Resources/Python"
 if [[ -d "$RUNTIME" ]]; then
   RUNTIME_BINARIES=()
   while IFS= read -r -d '' candidate; do
@@ -127,12 +134,12 @@ codesign --verify --strict "$STOP_APP"
 # The runtime has to survive being signed and sealed: an interpreter that
 # cannot import ssl or sqlite3 makes the private environment fail on first
 # launch, on someone else's Mac, with a dialog instead of an app.
-if [[ -x "$APP/Contents/Frameworks/Python/bin/python3" ]]; then
-  "$APP/Contents/Frameworks/Python/bin/python3" - <<'PYCHECK'
+if [[ -x "$APP/Contents/Resources/Python/bin/python3" ]]; then
+  "$APP/Contents/Resources/Python/bin/python3" - <<'PYCHECK'
 import sqlite3, ssl, sys, venv    # noqa: F401  (imported to prove they load)
 assert sys.version_info[:2] == (3, 12), sys.version
 PYCHECK
-  echo "Bundled interpreter runs: $("$APP/Contents/Frameworks/Python/bin/python3" -V)"
+  echo "Bundled interpreter runs: $("$APP/Contents/Resources/Python/bin/python3" -V)"
 fi
 
 MAIN_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
