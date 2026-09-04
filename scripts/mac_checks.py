@@ -7,6 +7,12 @@ sends one as the native helper would (a dictation with a dictionary hint),
 and writes the transcripts, the audio, and a Markdown summary to --out. Exits
 non-zero when a check fails. Standard library only.
 
+The runner's virtual GPU occasionally times out a Metal command buffer, after
+which the server process ignores every later one. Given --restart-command,
+the checks stop and relaunch the server the way the apps do and retry the
+sample once per run, which is what a person would do at the Mac; a second
+failure is reported as one.
+
 This is what the maintainer would do by hand before a release, minus the
 parts that need a person at the keyboard: granting Microphone, Input
 Monitoring and Accessibility, holding the push-to-talk key, and watching the
@@ -139,13 +145,52 @@ def wait_for_job(job_id: str, timeout: float) -> tuple[dict, list[tuple[float, s
     raise TimeoutError(f"job {job_id} still {job['status']} after {timeout:.0f}s: {job.get('detail')}")
 
 
+GPU_ERROR_MARKERS = ("[METAL]", "kIOGPUCommandBuffer", "GPU Timeout")
+
+
+def gpu_hiccup(job: dict) -> bool:
+    """A Metal command-buffer failure: the runner's virtual GPU, not the app."""
+    detail = job.get("detail") or ""
+    return job.get("status") == "error" and any(marker in detail for marker in GPU_ERROR_MARKERS)
+
+
+def restart_server(command: str) -> bool:
+    """Stop and relaunch the server as the apps do; True once it answers again."""
+    subprocess.run(command, shell=True)
+    return wait_for_server()
+
+
+class Transcriber:
+    """Uploads and waits, restarting the server once per run after a GPU hiccup."""
+
+    def __init__(self, restart_command: str | None, timeout: float):
+        self.restart_command = restart_command
+        self.timeout = timeout
+        self.restarted = False
+
+    def run(self, label: str, path: Path, filename: str, fields: dict[str, str]):
+        job, seen = wait_for_job(upload(path, filename, fields), self.timeout)
+        if gpu_hiccup(job) and self.restart_command and not self.restarted:
+            self.restarted = True
+            record("WARN", f"{label}: the runner's GPU timed out; restarting the server and retrying once",
+                   (job.get("detail") or "")[:120])
+            if not restart_server(self.restart_command):
+                record("FAIL", f"{label}: server answers again after the restart")
+                return job, seen
+            job, seen = wait_for_job(upload(path, filename, fields), self.timeout)
+        return job, seen
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--model", default="0.6b", help="model key to transcribe with")
     parser.add_argument("--timeout", type=float, default=900,
                         help="seconds allowed per job, first one includes the weight download")
+    parser.add_argument("--restart-command", default=None,
+                        help="shell command that stops and relaunches the server; used once, after a GPU timeout")
     args = parser.parse_args()
+    transcriber = Transcriber(args.restart_command, args.timeout)
     out: Path = args.out
     (out / "audio").mkdir(parents=True, exist_ok=True)
     (out / "transcripts").mkdir(parents=True, exist_ok=True)
@@ -180,9 +225,9 @@ def main() -> int:
         seconds = synthesise(voice, text, wav)
         record("PASS", f"{name}: synthesised {seconds:.1f}s with voice {voice}")
 
-        job_id = upload(wav, f"{name}.wav", {"model": args.model, "language": "auto", "timestamps": "true"})
         try:
-            job, seen = wait_for_job(job_id, args.timeout)
+            job, seen = transcriber.run(name, wav, f"{name}.wav",
+                                        {"model": args.model, "language": "auto", "timestamps": "true"})
         except TimeoutError as exc:
             record("FAIL", f"{name}: transcription finished", str(exc))
             continue
@@ -214,11 +259,10 @@ def main() -> int:
     # As the native helper sends a dictation: source labelled, the dictionary as the hint.
     english = out / "audio" / "english.wav"
     if english.exists():
-        job_id = upload(english, "Dictation 2026-09-04 09.00.00.wav",
-                        {"model": args.model, "language": "auto", "timestamps": "false",
-                         "turbo": "false", "context": "Qwen Scribe", "source": "dictation"})
         try:
-            job, _ = wait_for_job(job_id, args.timeout)
+            job, _ = transcriber.run("dictation", english, "Dictation 2026-09-04 09.00.00.wav",
+                                     {"model": args.model, "language": "auto", "timestamps": "false",
+                                      "turbo": "false", "context": "Qwen Scribe", "source": "dictation"})
             ok = job["status"] == "done" and bool((job["result"].get("text") or "").strip())
             record("PASS" if ok else "FAIL", "dictation-shaped upload with a dictionary hint transcribes",
                    (job["result"].get("text") if ok else job.get("detail", ""))[:80])

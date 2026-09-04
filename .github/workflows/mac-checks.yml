@@ -81,7 +81,15 @@ jobs:
           tail -n 25 "$HOME/Library/Logs/QwenScribe.log"
 
       - name: Transcribe synthesised speech through the real model
-        run: python scripts/mac_checks.py --out artifacts --model 0.6b
+        env:
+          # The runner's virtual GPU occasionally times out a Metal command
+          # buffer and the server then ignores every later one. The checks
+          # stop and relaunch the server the way the apps do and retry once.
+          QS_NO_OPEN: "1"
+          RESTART: >-
+            "dist/Stop Qwen Scribe.app/Contents/MacOS/StopQwenScribe";
+            bash "dist/Qwen Scribe.app/Contents/Resources/launch-server.sh"
+        run: python scripts/mac_checks.py --out artifacts --model 0.6b --restart-command "$RESTART"
 
       - name: Stop the server
         if: always()
