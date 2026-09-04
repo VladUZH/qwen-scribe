@@ -1,6 +1,7 @@
 """Failure-path checks for destructive release operations."""
 
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -119,6 +120,47 @@ class BundledRuntimePinTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
             self.assertIn("pinned SHA-256", result.stderr)
             self.assertFalse((root / "out").exists())
+
+
+class HelperLinkTests(unittest.TestCase):
+    """A missing framework is a link error no other suite can reach: the
+    helper compiles only on a Mac, so CI finds it minutes into a build.
+    Each entry names functions that one framework alone provides. A framework
+    the helper uses only for headers is absent on purpose: AudioToolbox gives
+    it AudioChannelLayout and kAudioFormatLinearPCM, which are a struct and an
+    enum, so nothing of it has to be linked."""
+
+    FRAMEWORKS = {
+        "AVFoundation": r"\bAV(?:URLAsset|AssetReader|AudioRecorder|CaptureDevice)\b",
+        "ApplicationServices": r"\bCGEvent(?:Post|Create\w+|SourceCreate)\b",
+        "Cocoa": r"\bNS(?:Application|StatusItem|Window)\b",
+        "CoreMedia": r"\bCM(?:SampleBuffer|BlockBuffer|Time)\w*\b",
+        "IOKit": r"\bIOHID\w+\b",
+        "ServiceManagement": r"\bSMAppService\b",
+    }
+
+    def setUp(self):
+        self.source = (ROOT / "native" / "DictationHelper.m").read_text()
+        script = (ROOT / "scripts" / "build_macos_apps.sh").read_text()
+        # The link line is one continued command; collapse it to search it.
+        start = script.index("\nclang ") + 1
+        end = script.index("\n\n", start)
+        self.link_line = " ".join(script[start:end].split())
+
+    def test_every_framework_the_helper_uses_is_linked(self):
+        for framework, identifiers in sorted(self.FRAMEWORKS.items()):
+            used = re.search(identifiers, self.source)
+            if not used:
+                continue
+            self.assertIn(
+                f"-framework {framework}", self.link_line,
+                f"{used.group(0)} needs -framework {framework}",
+            )
+
+    def test_the_table_still_describes_this_helper(self):
+        """A table nothing matches would pass the check above vacuously."""
+        for framework, identifiers in sorted(self.FRAMEWORKS.items()):
+            self.assertRegex(self.source, identifiers, f"{framework} entry matches nothing")
 
 
 if __name__ == "__main__":
