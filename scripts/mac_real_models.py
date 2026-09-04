@@ -150,8 +150,6 @@ def main() -> int:
         record("FAIL", f"{variant}: the conversion finishes", (job.get("detail") or "")[:160])
         return mc.finish(out)
     record("PASS", f"{variant}: converted in {convert_seconds / 60:.1f} min", " → ".join(steps[:6]))
-    record("PASS" if any(s.startswith("Quantizing") for s in steps) else "FAIL",
-           f"{variant}: the job reported quantizing the weights", " → ".join(steps))
 
     prepared = catalog()[variant]
     record("PASS" if prepared["state"] == "ready" else "FAIL", f"{variant}: the catalogue reports it ready")
@@ -165,6 +163,14 @@ def main() -> int:
         record("PASS" if 0.4 <= on_disk / expected <= 2.0 else "WARN",
                f"{variant}: its size matches what the picker promises",
                f"{on_disk} GB on disk against {expected} GB in memory")
+        # What proves the weights were quantized rather than copied. The job's
+        # own step lines are the wrong thing to assert on: quantizing a 0.6B
+        # model takes under a second, so polling can miss the line entirely,
+        # and tests/test_prepare.py already pins the exact sequence.
+        fp16_size = entries[base]["memory_gb"]
+        record("PASS" if on_disk < fp16_size * 0.75 else "FAIL",
+               f"{variant}: the weights on disk are quantized, not a copy of fp16",
+               f"{on_disk} GB against {fp16_size} GB of fp16 weights")
 
     # ── The same speech through both models ──────────────────────────────
     rows: list[str] = []
@@ -181,8 +187,12 @@ def main() -> int:
             continue
         rate, spans = word_diff_rate(reference, quantized)
         speedup = fp16_seconds / variant_seconds if variant_seconds else 0
-        record("PASS" if rate <= 0.35 else "WARN",
-               f"{name}: the variant stays close to fp16", f"{rate:.1%} of words differ")
+        # Quantization is lossy by design, so a difference is not a failure;
+        # a transcript with nothing in common with fp16 means the conversion
+        # itself is broken, and that is.
+        record("FAIL" if rate > 0.6 else "WARN" if rate > 0.25 else "PASS",
+               f"{name}: the variant stays close to fp16",
+               f"{rate:.1%} of comparable units differ")
         rows.append(f"| {name} ({expected}) | {seconds:.1f}s | {fp16_seconds:.1f}s | "
                     f"{variant_seconds:.1f}s | {speedup:.2f}x | {rate:.1%} |")
         (out / "transcripts" / f"{name}-diff.txt").write_text(

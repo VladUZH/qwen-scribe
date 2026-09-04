@@ -38,9 +38,18 @@ details when clearly documented.
   says what to expect from each. The default stays the fp16 1.7B
 - `GET /api/models` lists the catalog with each entry's state; `POST
   /api/models/{id}/prepare` and `DELETE /api/models/{id}` manage a variant
+- `docs/models.md` carries measured figures for the 0.6B 4-bit conversion,
+  from a real conversion on a macOS runner: 5 to 7 times faster than fp16,
+  0.54 GB on disk, and the three transcripts it differed on, including the
+  one word Japanese got wrong
 
 ### Changed
 
+- `compare_models.py` compares Chinese, Japanese and Korean character by
+  character. Those scripts are written without spaces, or space the same
+  words differently, so a whitespace word is not a unit of meaning: two
+  identical Korean transcripts were being reported as 22% different, while
+  a single wrong Japanese word hid inside one long token
 - A conversion made with `quantize_8bit.py` no longer silently replaces the
   1.7B; it is its own picker entry. An existing `models/qwen3-asr-1.7b-8bit`
   next to `server.py` is moved into the store when the server starts, so it

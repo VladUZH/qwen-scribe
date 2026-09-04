@@ -32,9 +32,41 @@ is worth an occasional slip, and the wrong one for names, numbers and
 non-English audio you cannot check. The default model stays the fp16 1.7B;
 every quantized variant is opt-in.
 
-Measured word-difference rates on real recordings, quiet, noisy and
-multilingual, are added here once the owner has run the comparison below;
-until then the upstream figures are the published expectation.
+### Measured, on a macOS runner
+
+The Mac checks workflow converts the 0.6B model to 4 bits on a GitHub
+`macos-15` runner and transcribes the same synthesised speech with both, so
+these figures come from a real conversion rather than the upstream table.
+Conversion took under half a minute and left 0.54 GB on disk, against the
+0.5 GB the picker promises.
+
+| Speech | fp16 0.6B | 0.6B 4-bit | Speed-up | Units differing |
+| --- | --- | --- | --- | --- |
+| English, 6.8s | 11.6s | 1.7s | 6.8x | 10% |
+| Korean, 4.8s | 4.8s | 0.9s | 5.4x | 0% |
+| Japanese, 5.3s | 3.7s | 0.8s | 4.9x | 15% |
+
+Read the ratios, not the seconds: that runner is a virtualized Mac whose
+GPU is far slower than the machine you are reading this on, and the fp16
+model ran below real time there. The speed-up matches the 4.7x the upstream
+library reports.
+
+What the differences were, which is the part worth knowing:
+
+- **English.** The model wrote "Quinscribe" where fp16 wrote "Quint scribe" —
+  neither is the product's name, and both are what a model without the
+  vocabulary hint does with it. Everything else was word for word identical.
+- **Korean.** Nothing was transcribed differently. The 4-bit output added
+  commas and wrote 세시에 where fp16 wrote 세 시에, which is a spacing choice
+  rather than a different word.
+- **Japanese.** The 4-bit model heard 今日は (today) for こんにちは (hello) —
+  a real error, on the first word, in a sentence it otherwise got exactly
+  right. This is the shape of what four bits costs: not gibberish, an
+  occasional confident substitution.
+
+Which is why the default stays fp16, and why the guidance above says to
+check names and non-English audio yourself. These are three short
+synthesised clips, not your recordings.
 
 ## Preparing a variant
 

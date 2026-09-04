@@ -28,8 +28,23 @@ import time
 from qwen_scribe import models
 
 
+# Chinese, Japanese and Korean: Han, Hiragana, Katakana and Hangul. Japanese
+# and Chinese are written without spaces at all, and Korean spacing is a
+# choice the model makes ("세 시에" or "세시에" for the same words), so a
+# whitespace-delimited word is not a unit of meaning in any of them.
+CJK = "\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff"
+_TOKEN = re.compile(f"[{CJK}]|[^\\W{CJK}]+(?:'[^\\W{CJK}]+)*")
+
+
 def words(text: str) -> list[str]:
-    return re.findall(r"[\w']+", text.lower())
+    """Comparable units: Latin words, and CJK characters one at a time.
+
+    Splitting CJK on whitespace would report two transcripts of the same
+    sentence as wholly different, and hide a single wrong character in a
+    long run. Punctuation is left out either way: it is not what a
+    quantized model is being judged on.
+    """
+    return _TOKEN.findall(text.lower())
 
 
 def word_diff_rate(reference: str, hypothesis: str) -> tuple[float, list[str]]:
