@@ -137,7 +137,7 @@ ALLOWED_SUFFIXES = {
     ".wav", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".aac", ".wma", ".aiff",
     ".qta",  # Apple Voice Memos (QuickTime container; needs ffmpeg >= 7 to
              # skip the undecodable APAC spatial track and use the AAC one)
-    # video (audio track is extracted via ffmpeg)
+    # video (the audio track is extracted by the app's decoder, or ffmpeg)
     ".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v",
 }
 
@@ -154,6 +154,13 @@ OVERSIZE_DETAIL = (
 
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "qwen-scribe-uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
+
+# The app's own media decoder, set by the launcher to the helper inside the
+# bundle. Empty when the server runs from source, where ffmpeg does the work.
+DECODER = os.environ.get("QWEN_SCRIBE_DECODER", "")
+# A wedged decoder must not hold the single worker for the rest of the day;
+# generous enough for a feature-length video on a slow disk.
+DECODE_TIMEOUT_SECONDS = 3600
 
 # The vocabulary hint is prepended to every chunk's prompt, so it is bounded.
 MAX_CONTEXT_CHARS = 2000

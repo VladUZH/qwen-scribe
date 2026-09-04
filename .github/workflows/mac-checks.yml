@@ -221,3 +221,107 @@ jobs:
             artifacts-models
             shots
           if-no-files-found: warn
+
+  bundled-runtime:
+    name: The app on a Mac with no Python of its own
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          # For the check script only. The server under test must use the
+          # interpreter inside the app, and the step below makes sure it can
+          # see no other.
+          python-version: "3.12"
+
+      - name: Cache the model weights
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-hub-qwen3-asr-0.6b-v1
+
+      - name: Cache the runtime archive
+        uses: actions/cache@v6
+        with:
+          path: .build/cache
+          key: python-runtime-${{ hashFiles('scripts/bundle_python.sh') }}
+
+      - name: Build the app with its own runtime
+        run: |
+          make app
+          echo "### App size" >> "$GITHUB_STEP_SUMMARY"
+          du -sh "dist/Qwen Scribe.app" | tee -a "$GITHUB_STEP_SUMMARY"
+          du -sh "dist/Qwen Scribe.app/Contents/Resources/Python" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: The signature has to hold with the runtime nested inside it
+        # The week's gating check: macOS reports a bundle whose nested Mach-O
+        # files are unsigned as damaged, and the user sees that, not a log.
+        run: |
+          codesign --verify --deep --strict --verbose=2 "dist/Qwen Scribe.app"
+          codesign -dv "dist/Qwen Scribe.app/Contents/Resources/Python/bin/python3.12" 2>&1 | grep -i "signature"
+
+      - name: Hide every other Python from the launcher
+        run: |
+          sudo mkdir -p /opt/qs-hidden
+          for candidate in /opt/homebrew/bin/python3* /usr/local/bin/python3* /opt/homebrew/bin/uv; do
+            [ -e "$candidate" ] && sudo mv "$candidate" /opt/qs-hidden/ || true
+          done
+          # What the launcher will be given: no directory on it holds a Python
+          # 3.12, which is the floor the launcher requires.
+          export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+          found=""
+          for python in $(command -v python3 python3.12 2>/dev/null || true); do
+            if "$python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)'; then
+              found="$found $python"
+            fi
+          done
+          if [ -n "$found" ]; then
+            echo "This check is pointless while$found is reachable." >&2
+            exit 1
+          fi
+          echo "No Python 3.12 on the launcher's PATH; $(command -v python3 || echo 'no python3 at all')"
+
+      - name: Start the app the way a first launch does
+        env:
+          QS_NO_OPEN: "1"
+        run: |
+          mkdir -p "$HOME/Library/Application Support/Qwen Scribe"
+          cat > "$HOME/Library/Application Support/Qwen Scribe/settings.json" <<'EOF'
+          {"dictation": {"model": "0.6b"}, "performance": {"preload_dictation_model": false}}
+          EOF
+          # A login shell would put Homebrew back on the path through
+          # path_helper; /bin/sh keeps the launcher with what it is given.
+          env -i HOME="$HOME" QS_NO_OPEN=1 SHELL=/bin/sh PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+            bash "dist/Qwen Scribe.app/Contents/Resources/launch-server.sh"
+          echo "--- launcher log ---"
+          tail -n 20 "$HOME/Library/Logs/QwenScribe.log"
+
+      - name: The private environment must come from inside the app
+        run: |
+          config="$HOME/Library/Application Support/Qwen Scribe/runtime/.venv/pyvenv.cfg"
+          cat "$config"
+          grep -q "Qwen Scribe.app/Contents/Resources/Python" "$config"
+          "$HOME/Library/Application Support/Qwen Scribe/runtime/.venv/bin/python" -c \
+            'import mlx.core, sys; print("mlx loads under", sys.version)'
+
+      - name: Transcribe through that environment
+        run: python scripts/mac_checks.py --out artifacts-bundled --model 0.6b
+
+      - name: Stop the server and put the hidden Pythons back
+        if: always()
+        run: |
+          "dist/Stop Qwen Scribe.app/Contents/MacOS/StopQwenScribe" || true
+          mkdir -p artifacts-bundled
+          cp "$HOME/Library/Logs/QwenScribe.log" artifacts-bundled/QwenScribe.log 2>/dev/null || true
+          for candidate in /opt/qs-hidden/*; do
+            [ -e "$candidate" ] && sudo mv "$candidate" /opt/homebrew/bin/ || true
+          done
+
+      - name: Upload the transcripts and the log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundled-runtime-${{ github.run_number }}
+          path: artifacts-bundled
+          if-no-files-found: warn
