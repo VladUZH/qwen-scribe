@@ -6,7 +6,7 @@ details when clearly documented.
 
 ## [Unreleased]
 
-## [0.3.0-beta.1] - 2026-10-02
+## [0.3.0-beta.1] - 2026-09-04
 
 The dictation release. Everything a daily dictation user asked for after
 v0.2.2, plus the model lifecycle that makes the first dictation of the day
@@ -62,12 +62,20 @@ and the macOS CI job installs and tests the real runtime.
   until quit. On an 8 GB Mac that had used both models, 4.6 GB stayed
   claimed all day. The interval is a setting, from ten minutes to four
   hours or never; the next use reloads the model in a few seconds
+- The pre-release Mac checks run on GitHub's Apple Silicon runner as a
+  workflow: it builds the app, starts the server through the app's own
+  launcher, and transcribes speech synthesised by macOS in English, Korean
+  and Japanese through the real 0.6B model with word timestamps. This build
+  passed all of them; recording, the push-to-talk keys and pasting still
+  need a person at a Mac, since a runner cannot grant those permissions
 
 ## [0.2.2-beta.1] - 2026-09-04
 
 Everything in this release comes from one hands-on testing report on r/macapps
 from someone who ran real video files through v0.2.1-beta.1, plus what a full
-end-to-end test pass of the result turned up before tagging.
+end-to-end test pass of the result turned up before tagging. It was merged
+together with 0.3.0-beta.1 and ships inside that build rather than as a
+separate download.
 
 ### Added
 

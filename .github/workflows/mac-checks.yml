@@ -1,0 +1,99 @@
+name: Mac checks
+
+# What the maintainer would do on a Mac before a release, done on GitHub's
+# Apple Silicon runner: build the app, run the helper's self-checks and HUD
+# renders, start the server through the app's own launcher (which creates the
+# private environment from the shipped lock, as on a user's first launch), and
+# transcribe speech synthesised by macOS in three languages through the real
+# model with word timestamps, the Korean and Japanese aligner included.
+#
+# The runner cannot grant Microphone, Input Monitoring or Accessibility, so
+# recording, the push-to-talk keys, and pasting remain hands-on checks.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  field-test:
+    name: Real model on the macOS runner
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Cache the model weights
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-hub-qwen3-asr-0.6b-v1
+
+      - name: Cache the wheels the launcher installs
+        uses: actions/cache@v6
+        with:
+          path: ~/Library/Caches/pip
+          key: launcher-pip-${{ hashFiles('requirements-lock.txt') }}
+
+      - name: Build the app
+        run: make app
+
+      - name: Helper self-checks and HUD renders
+        # Nothing here needs a permission: the checks print what is granted,
+        # and the HUD is drawn into a bitmap for the artifact.
+        continue-on-error: true
+        run: |
+          HELPER="dist/Qwen Scribe.app/Contents/MacOS/QwenScribe"
+          "$HELPER" --check
+          "$HELPER" --permissions
+          mkdir -p artifacts/hud
+          for state in listening transcribing loading inserted error; do
+            "$HELPER" --render-hud "artifacts/hud/$state.png" "$state" && echo "rendered $state"
+          done
+
+      - name: Keep the run to one model
+        # The server loads the dictation model at start, which is the 1.7B by
+        # default. The checks use the 0.6B throughout, so the run downloads and
+        # caches one model (the 0.6B's weights are 3.3 GB on the Hub).
+        run: |
+          mkdir -p "$HOME/Library/Application Support/Qwen Scribe"
+          cat > "$HOME/Library/Application Support/Qwen Scribe/settings.json" <<'EOF'
+          {"dictation": {"model": "0.6b"}, "performance": {"preload_dictation_model": false}}
+          EOF
+
+      - name: Start the server through the app's launcher
+        env:
+          QS_NO_OPEN: "1"
+        run: |
+          bash "dist/Qwen Scribe.app/Contents/Resources/launch-server.sh"
+          echo "--- launcher log ---"
+          tail -n 25 "$HOME/Library/Logs/QwenScribe.log"
+
+      - name: Transcribe synthesised speech through the real model
+        run: python scripts/mac_checks.py --out artifacts --model 0.6b
+
+      - name: Stop the server
+        if: always()
+        run: |
+          "dist/Stop Qwen Scribe.app/Contents/MacOS/StopQwenScribe" || true
+          mkdir -p artifacts
+          cp "$HOME/Library/Logs/QwenScribe.log" artifacts/QwenScribe.log 2>/dev/null || true
+
+      - name: Upload transcripts, audio, HUD renders and the log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mac-checks-${{ github.run_number }}
+          path: artifacts
+          if-no-files-found: warn

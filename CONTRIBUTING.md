@@ -32,6 +32,15 @@ CI installs `requirements-test.txt` and can test history, upload validation,
 and request security without downloading a model. Use `make setup-test` to
 reproduce that environment locally when a test passes for you but fails in CI.
 
+The **Mac checks** workflow runs on GitHub's Apple Silicon runner on every
+pull request: it builds the app, starts the server through the app's own
+launcher, and transcribes speech synthesised by macOS in English, Korean,
+and Japanese through the real model, word timestamps included
+(`scripts/mac_checks.py`). Its artifact carries the transcripts, the audio,
+the HUD renders, and the server log. What it cannot do is grant Microphone,
+Input Monitoring, or Accessibility, so recording, the push-to-talk keys, and
+pasting stay hands-on checks.
+
 ## Pull requests
 
 1. Keep each pull request focused on one coherent change.

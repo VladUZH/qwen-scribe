@@ -13,6 +13,12 @@ updates:
     groups:
       python-runtime:
         patterns: ["*"]
+    ignore:
+      # pydantic pins pydantic-core exactly, and Dependabot's uv updater has
+      # moved the core on its own regardless (#20: 2.48.0 against a pydantic
+      # that needs 2.46.5), producing a lock pip cannot install. The core
+      # follows whenever pydantic itself is bumped and re-resolved.
+      - dependency-name: "pydantic-core"
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

@@ -258,12 +258,19 @@ CI and hand-tested.
 
 - [ ] Test Fn on the built-in keyboard and at least one external keyboard;
       decide ship or fallback by Thursday 1 Oct.
-- [ ] Tag `v0.3.0-beta.1` on Friday 2 Oct; the pipeline signs and notarizes;
-      publish; announce on the r/macapps thread and as a Show HN follow-up
-      comment.
+- [x] Tag `v0.3.0-beta.1`. Done early, on 4 Sep, from `main` after the Mac
+      checks workflow (`.github/workflows/mac-checks.yml`) passed on the
+      macOS runner: build, helper self-checks, launcher, and the real 0.6B
+      model transcribing English, Korean and Japanese with word timestamps.
+      Unsigned, because the Apple Developer enrolment is applied for but not
+      paid; signing and notarization move to the first release after it
+      clears.
+- [ ] Publish the draft release; announce on the r/macapps thread and as a
+      Show HN follow-up comment.
 
-**Acceptance.** `v0.3.0-beta.1` is a signed, notarized download that
-launches without the Open Anyway hoop.
+**Acceptance.** `v0.3.0-beta.1` is a download that launches without the Open
+Anyway hoop once the Developer ID is in place; until then the release notes
+carry the unsigned-build instructions from earlier betas.
 
 ---
 
