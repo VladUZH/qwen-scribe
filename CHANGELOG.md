@@ -6,7 +6,7 @@ details when clearly documented.
 
 ## [Unreleased]
 
-## [0.3.0-beta.1] - 2026-10-02
+## [0.3.0-beta.1] - 2026-09-04
 
 The dictation release. Everything a daily dictation user asked for after
 v0.2.2, plus the model lifecycle that makes the first dictation of the day
@@ -67,7 +67,9 @@ and the macOS CI job installs and tests the real runtime.
 
 Everything in this release comes from one hands-on testing report on r/macapps
 from someone who ran real video files through v0.2.1-beta.1, plus what a full
-end-to-end test pass of the result turned up before tagging.
+end-to-end test pass of the result turned up before tagging. It was merged
+together with 0.3.0-beta.1 and ships inside that build rather than as a
+separate download.
 
 ### Added
 
