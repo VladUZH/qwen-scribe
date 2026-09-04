@@ -68,6 +68,10 @@ and the macOS CI job installs and tests the real runtime.
   and Japanese through the real 0.6B model with word timestamps. This build
   passed all of them; recording, the push-to-talk keys and pasting still
   need a person at a Mac, since a runner cannot grant those permissions
+- A release can be cut from GitHub alone: a commit on `main` titled
+  `Release v0.3.0-beta.1`, or the Tag release workflow's Run workflow button,
+  creates the tag and starts the build that drafts the release. Publishing
+  the draft is still a person's click, as before
 
 ## [0.2.2-beta.1] - 2026-09-04
 

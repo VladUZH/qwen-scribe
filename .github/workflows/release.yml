@@ -6,11 +6,13 @@ name: Release
 # ID credentials are configured, optionally signs/notarizes locally — before
 # publishing. See RELEASING.md.
 #
-# Running the workflow by hand (Actions → Release → Run workflow) is a dry
-# run: it builds, signs and notarizes when the secrets exist, packages, and
-# uploads the archive, checksums and notes as a workflow artifact. It never
-# touches releases. This is how new signing credentials are exercised before
-# a real tag depends on them.
+# Running the workflow by hand (Actions → Release → Run workflow) on a branch
+# is a dry run: it builds, signs and notarizes when the secrets exist,
+# packages, and uploads the archive, checksums and notes as a workflow
+# artifact. It never touches releases. This is how new signing credentials
+# are exercised before a real tag depends on them. Run on a tag it is a real
+# release build, which is how the Tag release workflow starts it: a tag
+# pushed by a workflow's token does not fire the tag trigger above.
 
 on:
   push:
@@ -48,7 +50,7 @@ jobs:
       - name: Derive versions from the tag
         id: version
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
             # A dry run has no tag: name the archive after the bundle version
             # plus the run number, which the packaging script accepts as a
             # pre-release suffix of that version.
@@ -137,7 +139,7 @@ jobs:
       - name: Compose provenance notes
         run: |
           {
-            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$GITHUB_REF_TYPE" != "tag" ]; then
               echo "Dry run built by CI from \`$GITHUB_REF_NAME\` (run $GITHUB_RUN_NUMBER); nothing was released."
             else
               echo "Draft release built by CI from tag \`$GITHUB_REF_NAME\`."
@@ -185,7 +187,7 @@ jobs:
           } > release-notes.md
 
       - name: Upload the dry-run archive as a workflow artifact
-        if: github.event_name == 'workflow_dispatch'
+        if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v7
         with:
           name: qwen-scribe-${{ steps.version.outputs.tag }}
@@ -196,7 +198,7 @@ jobs:
           if-no-files-found: error
 
       - name: Create draft release
-        if: github.event_name == 'push'
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

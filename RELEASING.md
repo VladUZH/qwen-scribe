@@ -11,12 +11,19 @@ publishes them. Nothing becomes public from automation alone.
    `scripts/build_macos_apps.sh`, and `version` in `pyproject.toml`. After
    changing the last one run `uv lock`, which records the project version in
    `uv.lock`; the lock check in `make check` and CI fails until it matches.
-2. Tag and push:
+2. Cut the tag, in either of two ways:
 
    ```bash
    git tag v0.2.1-beta.1
    git push origin v0.2.1-beta.1
    ```
+
+   or, from GitHub alone, land a commit on `main` whose subject is
+   `Release v0.2.1-beta.1` (squash-merge a pull request with that title, or
+   push such a commit), or open Actions → **Tag release** → Run workflow and
+   enter the version. The `Tag release` workflow checks that the version
+   matches the bundle and `pyproject.toml`, refuses an existing tag, pushes
+   the tag, and starts the `Release` workflow on it.
 
 3. The `Release` workflow builds the apps on a GitHub `macos-15` runner, runs
    the tests and repository checks, packages the archive, and creates a
