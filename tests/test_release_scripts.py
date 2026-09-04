@@ -11,6 +11,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def write_executable(path: Path, contents: str) -> None:
+    """A stand-in command on PATH, so a destructive script can be run for real."""
+    path.write_text(contents, encoding="utf-8")
+    path.chmod(0o755)
+
+
 class NotarizationScriptTests(unittest.TestCase):
     def test_failed_assessment_preserves_the_submitted_archive(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -29,9 +35,9 @@ class NotarizationScriptTests(unittest.TestCase):
 
             commands = root / "commands"
             commands.mkdir()
-            self.write_executable(commands / "xcrun", "#!/bin/sh\nexit 0\n")
-            self.write_executable(commands / "spctl", "#!/bin/sh\nexit 1\n")
-            self.write_executable(
+            write_executable(commands / "xcrun", "#!/bin/sh\nexit 0\n")
+            write_executable(commands / "spctl", "#!/bin/sh\nexit 1\n")
+            write_executable(
                 commands / "ditto",
                 """#!/usr/bin/env python3
 import sys
@@ -60,11 +66,62 @@ with zipfile.ZipFile(sys.argv[3]) as archive:
             self.assertTrue(archive.is_file())
             self.assertEqual(archive.read_bytes(), original)
 
-    @staticmethod
-    def write_executable(path: Path, contents: str) -> None:
-        path.write_text(contents, encoding="utf-8")
-        path.chmod(0o755)
+
+class BundledRuntimePinTests(unittest.TestCase):
+    """The runtime pin is what someone else's Mac will run, so it is checked
+    like a dependency: named exactly, hashed, and internally consistent."""
+
+    def setUp(self):
+        self.script = (ROOT / "scripts" / "bundle_python.sh").read_text()
+        self.pins = dict(
+            line.split("=", 1) for line in self.script.splitlines()
+            if line.startswith("PYTHON_") and "=" in line
+        )
+        self.pins = {key: value.strip('"') for key, value in self.pins.items()}
+
+    def test_the_archive_url_and_name_agree_with_the_version(self):
+        version, release = self.pins["PYTHON_VERSION"], self.pins["PYTHON_RELEASE"]
+        self.assertRegex(version, r"^3\.12\.\d+$")     # the floor the lock needs
+        self.assertRegex(release, r"^\d{8}$")
+        archive = self.pins["PYTHON_ARCHIVE"]
+        self.assertIn("${PYTHON_VERSION}+${PYTHON_RELEASE}", archive)
+        self.assertIn("aarch64-apple-darwin", archive)
+        self.assertIn("install_only", archive)
+        self.assertIn("${PYTHON_RELEASE}", self.pins["PYTHON_URL"])
+        self.assertIn("${PYTHON_ARCHIVE}", self.pins["PYTHON_URL"])
+
+    def test_the_hash_is_a_sha256(self):
+        self.assertRegex(self.pins["PYTHON_SHA256"], r"^[0-9a-f]{64}$")
+
+    def test_a_mismatching_archive_is_refused_rather_than_bundled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "cache"
+            cache.mkdir()
+            # An archive already in the cache under the expected name, with
+            # the wrong contents: the build must stop, not unpack it.
+            (cache / self.pins["PYTHON_ARCHIVE"].replace(
+                "${PYTHON_VERSION}", self.pins["PYTHON_VERSION"]).replace(
+                "${PYTHON_RELEASE}", self.pins["PYTHON_RELEASE"])).write_bytes(b"not a runtime")
+            commands = root / "commands"
+            commands.mkdir()
+            # No network: a download attempt fetches the same wrong bytes.
+            write_executable(commands / "curl", "#!/bin/sh\nprintf 'not a runtime' > \"$4\"\n")
+            environment = dict(
+                os.environ,
+                PATH=f"{commands}:{os.environ['PATH']}",
+                QS_BUILD_CACHE=str(cache),
+            )
+            result = subprocess.run(
+                ["bash", str(ROOT / "scripts" / "bundle_python.sh"), str(root / "out")],
+                capture_output=True, text=True, env=environment,
+            )
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("pinned SHA-256", result.stderr)
+            self.assertFalse((root / "out").exists())
 
 
 if __name__ == "__main__":
     unittest.main()
+
+

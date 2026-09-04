@@ -66,8 +66,13 @@ transcript text stay on the Mac.
 - Apple Silicon Mac
 - macOS 14 or newer, as required by current
   [MLX releases](https://ml-explore.github.io/mlx/build/html/install.html)
-- Native Python 3.12 or newer, the floor set in [pyproject.toml](pyproject.toml)
-  and required by the pinned NumPy in [requirements-lock.txt](requirements-lock.txt)
+- **No Python needed for the app.** It carries its own interpreter, so a Mac
+  with nothing installed can run it. Python 3.12 or newer is needed only to
+  run from source with `./run.sh` — the floor set in
+  [pyproject.toml](pyproject.toml) and required by the pinned NumPy in
+  [requirements-lock.txt](requirements-lock.txt). If you do have a suitable
+  Python and prefer it, a build made with `BUNDLE_PYTHON=0 make app` uses it
+  instead.
 - `ffmpeg` for non-WAV audio and video — Homebrew (`brew install ffmpeg`) or
   MacPorts (`sudo port install ffmpeg`). The Mac app looks on the standard
   Homebrew and MacPorts paths and then on your login shell's `PATH`, so any

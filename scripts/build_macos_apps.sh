@@ -32,6 +32,13 @@ fi
 rm -rf "$APP" "$STOP_APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/static" "$STOP_APP/Contents/MacOS"
 
+# The app carries its own interpreter, so a Mac needs no Python of its own.
+# BUNDLE_PYTHON=0 builds without it — offline, and quick for a local edit —
+# and the launcher then falls back to looking for a system Python as before.
+if [[ "${BUNDLE_PYTHON:-1}" == "1" ]]; then
+  "$ROOT/scripts/bundle_python.sh" "$APP/Contents/Frameworks/Python"
+fi
+
 cp "$ROOT/macos/launcher.sh" "$APP/Contents/Resources/launch-server.sh"
 cp "$ROOT/macos/QwenScribe-Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/assets/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
@@ -51,6 +58,36 @@ clang -fobjc-arc -arch arm64 -mmacosx-version-min=14.0 -Wall -Wextra \
   -framework Cocoa -framework ApplicationServices -framework AVFoundation \
   -framework AudioToolbox -framework IOKit -framework ServiceManagement \
   "$ROOT/native/DictationHelper.m" -o "$APP/Contents/MacOS/QwenScribe"
+
+# Nested code is signed before the bundle that seals it: macOS reports an app
+# whose inner Mach-O files are unsigned, or signed with another identity, as
+# damaged rather than as a signing mistake.
+RUNTIME="$APP/Contents/Frameworks/Python"
+if [[ -d "$RUNTIME" ]]; then
+  RUNTIME_BINARIES=()
+  while IFS= read -r -d '' candidate; do
+    if file -b "$candidate" | grep -q '^Mach-O'; then
+      RUNTIME_BINARIES+=("$candidate")
+    fi
+  done < <(find "$RUNTIME" -type f -print0)
+  if [[ ${#RUNTIME_BINARIES[@]} -eq 0 ]]; then
+    echo "The bundled runtime contains no Mach-O files; the archive layout changed." >&2
+    exit 1
+  fi
+  for binary in "${RUNTIME_BINARIES[@]}"; do
+    if [[ "$IDENTITY" == "-" ]]; then
+      codesign --force --sign - "$binary"
+    elif [[ "$binary" == */bin/python3.12 ]]; then
+      # Only the interpreter needs it, and only when hardened: see the
+      # comment in macos/QwenScribePython.entitlements.
+      codesign --force --options runtime --timestamp \
+        --entitlements "$ROOT/macos/QwenScribePython.entitlements" --sign "$IDENTITY" "$binary"
+    else
+      codesign --force --options runtime --timestamp --sign "$IDENTITY" "$binary"
+    fi
+  done
+  echo "Signed ${#RUNTIME_BINARIES[@]} Mach-O files in the bundled runtime."
+fi
 
 for plist in "$APP/Contents/Info.plist" "$STOP_APP/Contents/Info.plist"; do
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$plist"
@@ -86,6 +123,17 @@ fi
 
 codesign --verify --deep --strict "$APP"
 codesign --verify --strict "$STOP_APP"
+
+# The runtime has to survive being signed and sealed: an interpreter that
+# cannot import ssl or sqlite3 makes the private environment fail on first
+# launch, on someone else's Mac, with a dialog instead of an app.
+if [[ -x "$APP/Contents/Frameworks/Python/bin/python3" ]]; then
+  "$APP/Contents/Frameworks/Python/bin/python3" - <<'PYCHECK'
+import sqlite3, ssl, sys, venv    # noqa: F401  (imported to prove they load)
+assert sys.version_info[:2] == (3, 12), sys.version
+PYCHECK
+  echo "Bundled interpreter runs: $("$APP/Contents/Frameworks/Python/bin/python3" -V)"
+fi
 
 MAIN_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
 if [[ "$MAIN_EXECUTABLE" != "QwenScribe" ]] || ! file "$APP/Contents/MacOS/$MAIN_EXECUTABLE" | grep -q 'Mach-O 64-bit executable arm64'; then

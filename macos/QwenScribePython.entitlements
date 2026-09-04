@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- For the bundled interpreter only, and only under the hardened runtime
+	     a Developer ID signature turns on. The private environment it builds
+	     holds wheels from PyPI — mlx, numpy — whose Mach-O libraries Apple did
+	     not sign with this Team ID, and library validation would refuse to
+	     load them. Without this the signed app starts and then fails on the
+	     first import. The main app executable does not get this: it loads
+	     nothing but system frameworks. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

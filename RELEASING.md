@@ -45,6 +45,34 @@ not accept pre-release suffixes) and `CFBundleVersion` = the workflow run
 number. `scripts/package_release.sh` refuses a tag that does not match the
 bundle's version.
 
+## The bundled Python runtime
+
+`make app` puts a Python 3.12 runtime inside the bundle at
+`Contents/Frameworks/Python`, so the app needs no Python on the Mac it runs
+on. `scripts/bundle_python.sh` holds the pin: a `python-build-standalone`
+`install_only` build for `aarch64-apple-darwin`, named by version and
+verified against a SHA-256 that is committed here. A mismatch stops the
+build. The archive is cached under `.build/cache`, and Tcl/Tk is removed
+from it; nothing else is. Expect the app to grow by roughly 25 MB
+compressed.
+
+Every Mach-O file inside that runtime is signed before the bundle is, and
+`codesign --verify --deep --strict` runs on the result: macOS reports a
+bundle with unsigned nested code as *damaged*, which the user sees instead
+of an app. `BUNDLE_PYTHON=0 make app` builds without it, for a local edit or
+an offline machine, and the launcher then looks for a system Python as it
+used to.
+
+**When the Developer ID arrives**, the interpreter is signed with
+`macos/QwenScribePython.entitlements`, which carries
+`com.apple.security.cs.disable-library-validation`. The private environment
+holds wheels from PyPI whose libraries Apple did not sign with this Team ID,
+and under the hardened runtime library validation refuses to load them: the
+app would start and then fail on its first import. The build script already
+applies that entitlement to the interpreter and only to the interpreter.
+Notarizing a bundle with a nested runtime is not yet proven — the release
+dry run is the place to find out, before a tag depends on it.
+
 ## Developer ID signing (optional today, required for 1.0)
 
 CI signs with the Developer ID automatically when these repository secrets

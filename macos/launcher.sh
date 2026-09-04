@@ -40,6 +40,9 @@ RUNTIME_DIR="$APP_SUPPORT/runtime"
 VENV_DIR="$RUNTIME_DIR/.venv"
 PIDFILE="$APP_SUPPORT/server.pid"
 RESOURCES_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Contents/Frameworks/Python when the app ships a runtime; absent when it was
+# built with BUNDLE_PYTHON=0, and absent for ./run.sh, which has its own venv.
+BUNDLED_PYTHON="$(cd "$RESOURCES_DIR/.." 2>/dev/null && pwd)/Frameworks/Python/bin/python3"
 
 dialog() {
   /usr/bin/osascript - "$1" >/dev/null 2>&1 << 'APPLESCRIPT'
@@ -79,7 +82,17 @@ server_up() {
   curl -s -m 2 "$URL/api/config" 2>/dev/null | grep -q '"models"'
 }
 
+usable_python() {
+  [ -x "$1" ] && "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null
+}
+
 find_python() {
+  # The bundled runtime first: it is the one this build was tested with, and
+  # on a Mac with no Python of its own it is the only one there is.
+  if usable_python "$BUNDLED_PYTHON"; then
+    echo "$BUNDLED_PYTHON"
+    return 0
+  fi
   local candidates=(
     /opt/homebrew/bin/python3
     /usr/local/bin/python3
@@ -97,11 +110,9 @@ find_python() {
 
   local candidate
   for candidate in "${candidates[@]}"; do
-    [ -n "$candidate" ] && [ -x "$candidate" ] || continue
-    if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
-      echo "$candidate"
-      return 0
-    fi
+    [ -n "$candidate" ] && usable_python "$candidate" || continue
+    echo "$candidate"
+    return 0
   done
   return 1
 }
@@ -165,7 +176,11 @@ if [ ! -x "$VENV_DIR/bin/python" ]; then
     if uv venv "$VENV_DIR" --python '>=3.12' >> "$LOG" 2>&1; then created=1; fi
   fi
   if [ "$created" = "0" ]; then
-    fail_with_log "Failed to create the Python environment. Install Python 3.12 or newer and try again."
+    if [ -x "$BUNDLED_PYTHON" ]; then
+      fail_with_log "Qwen Scribe could not set up its private Python environment from the copy inside the app."
+    else
+      fail_with_log "Failed to create the Python environment. Install Python 3.12 or newer and try again."
+    fi
   fi
 fi
 

@@ -365,7 +365,7 @@ project and fatal to the people who download it.
 
 **Claude**
 
-- [ ] `feat/bundled-python`: `scripts/build_macos_apps.sh` downloads a
+- [x] `feat/bundled-python`: `scripts/build_macos_apps.sh` downloads a
       pinned, SHA-256-verified `python-build-standalone` 3.12 `install_only`
       build for `aarch64-apple-darwin` into
       `Contents/Frameworks/Python`, signs every Mach-O inside it (the
@@ -387,7 +387,7 @@ project and fatal to the people who download it.
       to ffmpeg only for mkv, webm, ogg, opus, and wma. The "ffmpeg missing"
       messages shrink to those five formats. Tests cover decoder selection
       by suffix and the error path when neither decoder exists.
-- [ ] `ci/bundled-runtime-check`: the Mac checks workflow gains a job that
+- [x] `ci/bundled-runtime-check`: the Mac checks workflow gains a job that
       starts the built app with every other Python removed from `PATH` and
       Homebrew's directories hidden, proving the launcher creates the
       environment from the bundled interpreter, and `codesign --verify
