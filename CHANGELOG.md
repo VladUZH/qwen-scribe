@@ -17,6 +17,10 @@ details when clearly documented.
   Dictation, Models, Advanced — one visible at a time. **Set up** on the
   dictation card opens the panel at its own group, and Escape, the close
   button, or a click on the page closes it
+- Closing the settings panel always hands focus back to something: the
+  control that opened it, or the gear when that control is gone. Safari,
+  following the platform, does not focus a button when it is clicked, so on
+  a Mac there was nothing to restore and focus was left nowhere
 - A setting that is quietly changing every transcript is named on the page
   rather than left behind a panel: while a vocabulary hint is set, a label
   above the dictation card says how many terms it holds and opens the field

@@ -1693,7 +1693,8 @@
     }
   });
 
-  $("btnDictationSetup").addEventListener("click", () => openSettings("dictation"));
+  $("btnDictationSetup").addEventListener("click", () =>
+    openSettings("dictation", $("btnDictationSetup")));
 
   // Named for the permission macOS is actually withholding, so the sentence
   // below can say what to grant rather than listing all three every time.
@@ -1773,8 +1774,11 @@
     sheet.querySelector(".sheet-body").scrollTop = 0;
   }
 
-  function openSettings(group = "transcription") {
-    if (sheet.hidden) returnFocusTo = document.activeElement;
+  // The opener is passed in rather than read from document.activeElement:
+  // Safari, following the platform, does not focus a button when it is
+  // clicked, so on a Mac there would be nothing to hand focus back to.
+  function openSettings(group = "transcription", opener = null) {
+    if (sheet.hidden) returnFocusTo = opener || document.activeElement;
     showGroup(group);
     backdrop.hidden = false;
     sheet.hidden = false;
@@ -1789,12 +1793,17 @@
     backdrop.hidden = true;
     document.body.style.overflow = "";
     $("btnSettings").setAttribute("aria-expanded", "false");
-    // Back to whatever opened it — the gear, a chip, or the dictation card.
-    if (returnFocusTo && returnFocusTo.isConnected) returnFocusTo.focus();
+    // Back to whatever opened it — the gear, a chip, or the dictation card —
+    // and to the gear when that is gone, as a chip is once its setting is
+    // cleared. Never nowhere: the next Tab should start where the panel was.
+    const back = returnFocusTo && returnFocusTo.isConnected && returnFocusTo !== document.body
+      ? returnFocusTo : $("btnSettings");
+    back.focus();
     returnFocusTo = null;
   }
 
-  $("btnSettings").addEventListener("click", () => sheet.hidden ? openSettings() : closeSettings());
+  $("btnSettings").addEventListener("click", () =>
+    sheet.hidden ? openSettings("transcription", $("btnSettings")) : closeSettings());
   $("btnSettingsClose").addEventListener("click", closeSettings);
   backdrop.addEventListener("click", closeSettings);
   for (const tab of tabs) tab.addEventListener("click", () => showGroup(tab.dataset.group));
@@ -1827,7 +1836,7 @@
       const count = document.createElement("b");
       count.textContent = `${terms.length} ${terms.length === 1 ? "term" : "terms"}`;
       chip.append(count);
-      chip.addEventListener("click", () => openSettings("transcription"));
+      chip.addEventListener("click", () => openSettings("transcription", chip));
       chips.append(chip);
     }
     chips.hidden = chips.children.length === 0;

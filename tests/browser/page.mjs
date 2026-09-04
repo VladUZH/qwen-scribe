@@ -97,12 +97,16 @@ await shot("03-models");
 await page.keyboard.press("Escape");
 await page.waitForSelector("#settings", { state: "hidden" });
 check("Escape closes the sheet and focus comes back to the gear",
-  (await page.evaluate(() => document.activeElement.id)) === "btnSettings");
+  (await page.evaluate(() => document.activeElement.id)) === "btnSettings",
+  await page.evaluate(() => document.activeElement.id || document.activeElement.tagName));
 await page.click("#btnDictationSetup");
 await page.waitForSelector("#groupDictation:not([hidden])");
 check("the dictation card opens the sheet at its own group", await visible("#setHotkey"));
 await page.click("#btnSettingsClose");
 await page.waitForSelector("#settings", { state: "hidden" });
+check("closing it hands focus back to the card's own button",
+  (await page.evaluate(() => document.activeElement.id)) === "btnDictationSetup",
+  await page.evaluate(() => document.activeElement.id || document.activeElement.tagName));
 
 // ── 3. A vocabulary hint is named on the page while it applies ───────────
 await page.click("#btnSettings");
