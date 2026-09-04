@@ -6,6 +6,29 @@ details when clearly documented.
 
 ## [Unreleased]
 
+### Added
+
+- Quantized models in the picker: **1.7B 8-bit** (fastest accurate) and
+  **0.6B 4-bit** (fastest) next to the two upstream models. Either is made
+  on this Mac from the upstream weights when you press **Prepare** under the
+  picker; the conversion runs in the same queue as transcriptions, shows its
+  steps, can be cancelled, and leaves the variant under
+  `~/Library/Application Support/Qwen Scribe/models`, where it survives app
+  upgrades. **Remove** deletes it again. The note under each picker says
+  what the chosen model needs and how much memory it takes; `docs/models.md`
+  says what to expect from each. The default stays the fp16 1.7B
+- `GET /api/models` lists the catalog with each entry's state; `POST
+  /api/models/{id}/prepare` and `DELETE /api/models/{id}` manage a variant
+
+### Changed
+
+- A conversion made with `quantize_8bit.py` no longer silently replaces the
+  1.7B; it is its own picker entry. An existing `models/qwen3-asr-1.7b-8bit`
+  next to `server.py` is moved into the store when the server starts, so it
+  is offered rather than made again. `QWEN_SCRIBE_MODEL_DIR` now names the
+  store; `quantize_8bit.py` takes the variant as an argument and
+  `compare_models.py` compares every prepared variant with its fp16 model
+
 ## [0.3.0-beta.1] - 2026-09-04
 
 The dictation release. Everything a daily dictation user asked for after

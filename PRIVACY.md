@@ -22,7 +22,10 @@ key.
 - Diagnostic output is written to `~/Library/Logs/QwenScribe.log` and may
   contain media filenames, local paths, dependency output, and error messages.
 - Downloaded model weights normally live in the Hugging Face cache, usually
-  `~/.cache/huggingface/hub`.
+  `~/.cache/huggingface/hub`. A quantized variant you prepare from the model
+  picker is written to `~/Library/Application Support/Qwen Scribe/models`;
+  it is made on this Mac from those downloaded weights, and **Remove** under
+  the picker deletes it.
 - Uploaded media is copied to a randomly named temporary file while a job runs
   and is deleted when that job succeeds or is cancelled. The copy for a job
   that failed is kept for up to an hour so that Retry does not need the file

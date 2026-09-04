@@ -28,7 +28,7 @@ _session_lock = threading.Lock()
 
 
 def _model_id(model_key: str) -> str:
-    return config.MODELS[model_key]
+    return config.model_source(model_key)
 
 
 def _is_local(model_id: str) -> bool:
@@ -51,7 +51,17 @@ def loaded_models() -> list[str]:
     """The model keys currently held in memory."""
     with _session_lock:
         held = set(_sessions)
-    return [key for key, model_id in config.MODELS.items() if model_id in held]
+    return [key for key in config.MODEL_CATALOG if config.model_source(key) in held]
+
+
+def drop(model_id: str) -> bool:
+    """Unload one model by its source id; True when it was loaded."""
+    with _session_lock:
+        was_loaded = _sessions.pop(model_id, None) is not None
+        _last_used.pop(model_id, None)
+    if was_loaded:
+        _release_memory()
+    return was_loaded
 
 
 def drop_idle(idle_seconds: float, now: float | None = None) -> list[str]:

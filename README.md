@@ -76,9 +76,11 @@ transcript text stay on the Mac.
   `xcode-select --install`
 
 The 1.7B model needs roughly 3.4 GB of unified memory and the 0.6B model roughly
-1.2 GB, in addition to normal application overhead. Model weights are not
-included in this repository; the first use downloads them, with the progress
-shown on the job. A loaded model is released after 20 minutes without a job,
+1.2 GB, in addition to normal application overhead; the quantized variants the
+picker can prepare on your Mac need about 1.9 GB and 0.5 GB
+([docs/models.md](docs/models.md)). Model weights are not included in this
+repository; the first use downloads them, with the progress shown on the
+job. A loaded model is released after 20 minutes without a job,
 and the dictation model is loaded when the app starts so the first dictation is
 quick. Both are settings behind **Set up** on the dictation card.
 
@@ -176,6 +178,7 @@ clipboard and reports the failure instead of claiming success. See
 | Private runtime | `~/Library/Application Support/Qwen Scribe/runtime` |
 | Diagnostic log | `~/Library/Logs/QwenScribe.log` |
 | Downloaded models | `~/.cache/huggingface/hub` |
+| Quantized variants prepared on this Mac | `~/Library/Application Support/Qwen Scribe/models` |
 
 Saved transcripts are readable, unencrypted JSON. Use the history controls to
 delete one or all. Normal filesystem deletion is not secure erasure, and local
@@ -189,7 +192,7 @@ Mac app starts:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `QWEN_SCRIBE_DATA_DIR` | `~/Library/Application Support/Qwen Scribe` | Where transcript history is stored |
-| `QWEN_SCRIBE_MODEL_DIR` | `./models` | Where a locally quantized model is looked up |
+| `QWEN_SCRIBE_MODEL_DIR` | `~/Library/Application Support/Qwen Scribe/models` | Where quantized variants prepared on this Mac are stored |
 | `QWEN_SCRIBE_PORT` | `8990` | Port for the local server |
 
 `QWEN_SCRIBE_PORT` only applies when you start the server yourself with
@@ -215,19 +218,17 @@ identity for Accessibility, Input Monitoring, and Microphone access. Set
 `CODESIGN_IDENTITY` to a Developer ID identity for a release build; notarization
 is intentionally a separate release-owner step.
 
-### Optional 8-bit conversion
+### Quantized models
 
-For source-based use, a local 8-bit conversion can reduce decoding latency:
-
-```bash
-source .venv/bin/activate
-python quantize_8bit.py
-python compare_models.py path/to/representative-recording.m4a
-```
-
-This creates a multi-gigabyte `models/` directory that is intentionally ignored
-by Git. Validate names and numbers on representative recordings before relying
-on a quantized model.
+The model picker offers **1.7B 8-bit** and **0.6B 4-bit** next to the two
+upstream models. Either is made on your Mac from the upstream weights when
+you press **Prepare** under the picker, a few minutes once, and is stored
+under `~/Library/Application Support/Qwen Scribe/models`.
+[docs/models.md](docs/models.md) says what to expect from each. From a
+terminal the same conversion is `python quantize_8bit.py [1.7b-8bit|0.6b-4bit]`,
+and `python compare_models.py recording.m4a` measures speed and word
+differences against the fp16 model on your own recordings. Validate names
+and numbers on representative recordings before relying on a quantized model.
 
 ## Architecture
 

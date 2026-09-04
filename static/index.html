@@ -105,6 +105,11 @@
   .check input { accent-color: var(--amber); width: 16px; height: 16px; }
   .check label { font-size: 13.5px; cursor: pointer; white-space: nowrap; }
   .check .hint { color: var(--muted); font-size: 12px; }
+  /* Under a model picker: what the chosen model needs before it can be used,
+     with the one action that gets it there. */
+  .model-note { margin: 6px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .model-note button.act { padding: 3px 9px; font-size: 11.5px; margin-left: 6px; vertical-align: baseline; }
+  .model-note.attention { color: var(--fg); }
   .check.plain { padding-top: 0; }
 
   /* Secondary options — present, but not competing with the primary path */
@@ -322,10 +327,8 @@
   <div class="options">
     <div class="field">
       <label for="model">Model</label>
-      <select id="model">
-        <option value="1.7b">1.7B — accuracy</option>
-        <option value="0.6b">0.6B — speed</option>
-      </select>
+      <select id="model"></select>
+      <p class="model-note" id="modelNote" hidden></p>
     </div>
     <div class="field">
       <label for="language">Language</label>
@@ -373,6 +376,7 @@
     <div class="field">
       <label for="setModel">Dictation model</label>
       <select id="setModel"></select>
+      <p class="model-note" id="setModelNote" hidden></p>
     </div>
     <div class="field">
       <label for="setLanguage">Dictation language</label>
@@ -568,7 +572,10 @@
       sel.appendChild(o);
     });
     sel.value = cfg.languages.includes("English") ? "English" : "auto";
-    $("model").value = cfg.default_model;
+    catalogDefault = cfg.default_model;
+    // The catalog request fills the picker with labels and states; should it
+    // fail, the bare ids from here still make the picker usable.
+    if ($("model").options.length === 0) fillModelPicker($("model"), cfg.models || [], cfg.default_model);
     // The server owns the supported-format list; mirror it so the caption,
     // the picker filter, and the upload check can never drift apart.
     if (Array.isArray(cfg.extensions) && cfg.extensions.length) {
@@ -583,10 +590,6 @@
         shown.join(" · ") + (rest > 0 ? ` · +${rest} more` : "");
       $("formatsFull").textContent = bare.join(", ");
       $("file").accept = cfg.extensions.join(",");
-    }
-    if (cfg.quantized) {
-      $("runtime").textContent = "Qwen3-ASR · MLX · Metal · 8-bit";
-      $("model").options[0].textContent = "1.7B — accuracy (8-bit)";
     }
     if (!cfg.ffmpeg) {
       $("runtime").textContent = "ffmpeg missing — install it with Homebrew or MacPorts";
@@ -728,7 +731,9 @@
       row.className = `queue-item ${job.status}`;
       const name = document.createElement("span");
       name.className = "queue-name";
-      name.textContent = job.filename || "(unnamed)";
+      name.textContent = job.kind === "prepare"
+        ? `${job.status === "done" ? "Prepared" : "Preparing"} ${job.label || job.model}`
+        : (job.filename || "(unnamed)");
       const state = document.createElement("span");
       state.className = "queue-state";
       const place = waiting.indexOf(job);
@@ -736,6 +741,19 @@
         ? (place === 0 ? "queued — next" : `queued — ${place + (running ? 1 : 0)} ahead`)
         : (job.detail || job.status);
       row.append(name, state);
+      if (job.kind === "prepare") {
+        // Nothing to open: the result is a model in the picker. A failed
+        // conversion is started afresh rather than retried from an upload
+        // it never had.
+        if (!FINISHED.has(job.status)) {
+          const cancel = queueButton("Cancel", true, () => act(`/api/jobs/${job.id}/cancel`));
+          cancel.disabled = Boolean(job.cancel_requested);
+          row.append(cancel);
+        } else if (job.status === "error") {
+          row.append(queueButton("Prepare again", false, () => act(`/api/models/${job.model}/prepare`)));
+        }
+        return row;
+      }
       if (job.status === "done" && !job.ephemeral) {
         // A retried or background job finishes outside the detail panel's
         // poll loop, so this is the only way to reach its transcript. A
@@ -783,6 +801,7 @@
   let seenDone = null;
   let queueSeq = 0;
   let queueSignature = null;
+  let prepareSignature = null;
 
   async function refreshQueue() {
     const seq = ++queueSeq;
@@ -801,6 +820,14 @@
     if (signature !== queueSignature) {
       queueSignature = signature;
       renderQueue(jobs);
+    }
+    // A conversion that started, finished or failed changes what the pickers
+    // should say; the catalog is re-read only on such a transition.
+    const preparing = JSON.stringify(jobs.filter(job => job.kind === "prepare").map(job => [job.id, job.status]));
+    if (preparing !== prepareSignature) {
+      const first = prepareSignature === null;
+      prepareSignature = preparing;
+      if (!first) loadModels();
     }
     // A retried or background job saves its transcript without the detail
     // panel's poll loop ever seeing it, so the history list has to be told.
@@ -1046,7 +1073,93 @@
 
   // ── Dictation settings ────────────────────────────────────────────────
   const HOTKEY_LABELS = {};
-  const MODEL_LABELS = { "1.7b": "1.7B — accuracy", "0.6b": "0.6B — speed" };
+
+  // ── Model catalog ─────────────────────────────────────────────────────
+  // What the server can transcribe with: the two upstream models, and the
+  // quantized variants it makes on this Mac once asked to. Both pickers are
+  // built from it, and the note under each says what its choice still needs.
+  let catalog = [];
+  let catalogDefault = "1.7b";
+  const catalogEntry = id => catalog.find(item => item.id === id);
+  const STATE_SUFFIX = { needs_conversion: " · prepare first", converting: " · preparing…" };
+
+  function modelLabel(id) {
+    const item = catalogEntry(id);
+    return item ? `${item.label} — ${item.note}${STATE_SUFFIX[item.state] || ""}` : id;
+  }
+
+  function fillModelPicker(sel, ids, preferred) {
+    const current = sel.value;
+    sel.replaceChildren();
+    for (const id of ids) {
+      const o = document.createElement("option");
+      o.value = id;
+      o.textContent = modelLabel(id);
+      sel.appendChild(o);
+    }
+    sel.value = ids.includes(current) ? current : (ids.includes(preferred) ? preferred : ids[0] || "");
+  }
+
+  function renderModelNote(sel, note) {
+    const item = catalogEntry(sel.value);
+    note.replaceChildren();
+    note.classList.remove("attention");
+    if (!item) { note.hidden = true; return; }
+    const text = document.createTextNode("");
+    note.append(text);
+    if (item.state === "needs_conversion") {
+      const base = catalogEntry(item.base);
+      const download = base && base.state === "downloadable"
+        ? ` The ${base.label} weights are downloaded first.` : "";
+      text.textContent = `Not prepared yet: made on this Mac from the ${base ? base.label : "upstream"} weights, a few minutes once, about ${item.memory_gb} GB in memory.${download}`;
+      note.classList.add("attention");
+      const prepare = queueButton("Prepare", false, async () => {
+        await act(`/api/models/${item.id}/prepare`);
+        await loadModels();
+      });
+      note.append(prepare);
+    } else if (item.state === "converting") {
+      text.textContent = "Being prepared now; progress is in the queue below.";
+    } else if (item.bits) {
+      text.textContent = `Prepared · ${item.bits}-bit · ${item.disk_gb != null ? item.disk_gb + " GB on disk" : ""}`.replace(/ · $/, "");
+      const remove = queueButton("Remove", true, async () => {
+        let message = "";
+        try {
+          const res = await fetch(`/api/models/${item.id}`, { method: "DELETE" });
+          if (!res.ok) message = (await res.json().catch(() => ({}))).detail || `Request failed (${res.status})`;
+        } catch { message = "Server unreachable. Is server.py still running?"; }
+        $("queueError").textContent = message;
+        await loadModels();
+      });
+      note.append(remove);
+    } else {
+      text.textContent = item.state === "downloadable"
+        ? `Downloaded from Hugging Face on first use · about ${item.memory_gb} GB in memory.`
+        : `Downloaded · about ${item.memory_gb} GB in memory.`;
+    }
+    note.hidden = false;
+  }
+
+  function renderModelNotes() {
+    renderModelNote($("model"), $("modelNote"));
+    renderModelNote($("setModel"), $("setModelNote"));
+  }
+
+  async function loadModels() {
+    let body;
+    try {
+      const res = await fetch("/api/models");
+      if (!res.ok) return;
+      body = await res.json();
+    } catch { return; }
+    catalog = Array.isArray(body.models) ? body.models : [];
+    catalogDefault = body.default || catalogDefault;
+    const ids = catalog.map(item => item.id);
+    fillModelPicker($("model"), ids, catalogDefault);
+    fillModelPicker($("setModel"), ids, catalogDefault);
+    renderModelNotes();
+  }
+  ["model", "setModel"].forEach(id => $(id).addEventListener("change", renderModelNotes));
 
   // The one-line instruction on the card follows the mode, so it never tells
   // someone to hold a key the helper is waiting for them to tap.
@@ -1083,14 +1196,18 @@
         o.value = typeof item === "object" ? item.id : item;
         o.textContent = typeof item === "object" ? item.label
           : item === "auto" ? "Auto-detect"
-          : MODEL_LABELS[item] || item;
+          : item;
         sel.appendChild(o);
       }
       sel.value = value;
     };
     for (const h of body.options.hotkeys) HOTKEY_LABELS[h.id] = h.label;
     fill($("setHotkey"), body.options.hotkeys, body.dictation.hotkey);
-    fill($("setModel"), body.options.models, body.dictation.model);
+    // The catalog carries the labels and states; the ids from the settings
+    // response are the fallback when it could not be read.
+    await loadModels();
+    if ($("setModel").options.length === 0) fill($("setModel"), body.options.models, body.dictation.model);
+    $("setModel").value = body.dictation.model;
     fill($("setLanguage"), body.options.languages, body.dictation.language);
     fill($("setMode"), body.options.modes, body.dictation.mode);
     $("setMaxSeconds").value = String(body.dictation.max_seconds);
@@ -1120,6 +1237,7 @@
     $("btnDictationSetup").hidden = false;
     await configReady.catch(() => {});
     applyTranscriptionSettings(body.transcription);
+    renderModelNotes();
   }
 
   // ── Transcription options (persisted server-side, like the dictation ones,
