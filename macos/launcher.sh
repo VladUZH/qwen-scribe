@@ -40,6 +40,9 @@ RUNTIME_DIR="$APP_SUPPORT/runtime"
 VENV_DIR="$RUNTIME_DIR/.venv"
 PIDFILE="$APP_SUPPORT/server.pid"
 RESOURCES_DIR="$(cd "$(dirname "$0")" && pwd)"
+# The interpreter the app ships with; absent when it was built with
+# BUNDLE_PYTHON=0, and absent for ./run.sh, which has its own environment.
+BUNDLED_PYTHON="$RESOURCES_DIR/Python/bin/python3"
 
 dialog() {
   /usr/bin/osascript - "$1" >/dev/null 2>&1 << 'APPLESCRIPT'
@@ -79,7 +82,17 @@ server_up() {
   curl -s -m 2 "$URL/api/config" 2>/dev/null | grep -q '"models"'
 }
 
+usable_python() {
+  [ -x "$1" ] && "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null
+}
+
 find_python() {
+  # The bundled runtime first: it is the one this build was tested with, and
+  # on a Mac with no Python of its own it is the only one there is.
+  if usable_python "$BUNDLED_PYTHON"; then
+    echo "$BUNDLED_PYTHON"
+    return 0
+  fi
   local candidates=(
     /opt/homebrew/bin/python3
     /usr/local/bin/python3
@@ -97,11 +110,9 @@ find_python() {
 
   local candidate
   for candidate in "${candidates[@]}"; do
-    [ -n "$candidate" ] && [ -x "$candidate" ] || continue
-    if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
-      echo "$candidate"
-      return 0
-    fi
+    [ -n "$candidate" ] && usable_python "$candidate" || continue
+    echo "$candidate"
+    return 0
   done
   return 1
 }
@@ -165,7 +176,11 @@ if [ ! -x "$VENV_DIR/bin/python" ]; then
     if uv venv "$VENV_DIR" --python '>=3.12' >> "$LOG" 2>&1; then created=1; fi
   fi
   if [ "$created" = "0" ]; then
-    fail_with_log "Failed to create the Python environment. Install Python 3.12 or newer and try again."
+    if [ -x "$BUNDLED_PYTHON" ]; then
+      fail_with_log "Qwen Scribe could not set up its private Python environment from the copy inside the app."
+    else
+      fail_with_log "Failed to create the Python environment. Install Python 3.12 or newer and try again."
+    fi
   fi
 fi
 
@@ -188,6 +203,22 @@ fi
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
   /usr/bin/osascript -e 'display notification "ffmpeg is missing — WAV works, but other media needs it (brew install ffmpeg / sudo port install ffmpeg)" with title "Qwen Scribe"' 2>/dev/null
+fi
+
+# The helper is also the app's media decoder: with it, only Matroska, WebM,
+# Ogg, Opus and WMA still need ffmpeg, which is what makes a Mac with no
+# Homebrew able to transcribe an .m4a or an .mp4.
+HELPER="$(cd "$RESOURCES_DIR/../MacOS" 2>/dev/null && pwd)/QwenScribe"
+if [ -x "$HELPER" ]; then
+  export QWEN_SCRIBE_DECODER="$HELPER"
+fi
+
+# The standard library the server imports lives inside the app, and the app
+# is signed. Writing bytecode next to it would invalidate that signature on
+# any Mac where the bundle is writable; it is precompiled at build time, so
+# there is nothing to gain by writing more.
+if [ -x "$BUNDLED_PYTHON" ]; then
+  export PYTHONDONTWRITEBYTECODE=1
 fi
 
 cd "$RUNTIME_DIR" || fail_with_log "Cannot open Qwen Scribe's local runtime."

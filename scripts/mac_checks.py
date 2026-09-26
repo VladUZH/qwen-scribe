@@ -291,6 +291,29 @@ def main() -> int:
         except TimeoutError as exc:
             record("FAIL", "dictation-shaped upload with a dictionary hint transcribes", str(exc))
 
+    # The app's own decoder: an .m4a is what a Mac with no Homebrew cannot
+    # transcribe unless AVFoundation is doing the work.
+    status, body = request("GET", "/api/config")
+    served = json.loads(body)
+    record("PASS" if served.get("decoder") is not None else "FAIL",
+           "the server says which decoders it has",
+           f"own decoder: {served.get('decoder')}, ffmpeg: {served.get('ffmpeg')}")
+    english_wav = out / "audio" / "english.wav"
+    if english_wav.exists() and shutil.which("afconvert"):
+        m4a = out / "audio" / "english.m4a"
+        subprocess.run(["afconvert", "-f", "m4af", "-d", "aac", str(english_wav), str(m4a)],
+                       check=True)
+        without = "" if served.get("ffmpeg") else " with no ffmpeg on the server's PATH"
+        try:
+            job, _ = transcriber.run("m4a", m4a, "english.m4a",
+                                     {"model": args.model, "language": "auto", "timestamps": "false"})
+            text_out = (job["result"].get("text") or "").strip() if job["status"] == "done" else ""
+            record("PASS" if text_out else "FAIL", f"an .m4a transcribes{without}",
+                   text_out[:70] or job.get("detail", ""))
+            (out / "transcripts" / "m4a.json").write_text(json.dumps(job, ensure_ascii=False, indent=2))
+        except TimeoutError as exc:
+            record("FAIL", f"an .m4a transcribes{without}", str(exc))
+
     status, body = request("GET", "/api/transcripts")
     saved = json.loads(body)["transcripts"]
     record("PASS" if len(saved) >= 1 else "FAIL", "transcripts were saved to history", f"{len(saved)} saved")

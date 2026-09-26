@@ -1,7 +1,7 @@
 PYTHON ?= .venv/bin/python
 SHELL_SCRIPTS = run.sh scripts/setup_python.sh scripts/build_macos_apps.sh \
-                scripts/package_release.sh scripts/notarize.sh scripts/release_versions.sh \
-                macos/launcher.sh macos/stop.sh
+                scripts/bundle_python.sh scripts/package_release.sh scripts/notarize.sh \
+                scripts/release_versions.sh macos/launcher.sh macos/stop.sh
 
 .PHONY: setup setup-test run test test-js lint-sh lock check app package clean
 

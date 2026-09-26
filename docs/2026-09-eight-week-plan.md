@@ -365,10 +365,15 @@ project and fatal to the people who download it.
 
 **Claude**
 
-- [ ] `feat/bundled-python`: `scripts/build_macos_apps.sh` downloads a
+- [x] `feat/bundled-python`: `scripts/build_macos_apps.sh` downloads a
       pinned, SHA-256-verified `python-build-standalone` 3.12 `install_only`
       build for `aarch64-apple-darwin` into
-      `Contents/Frameworks/Python`, signs every Mach-O inside it (the
+      `Contents/Resources/Python` — not `Frameworks`, where the first CI run
+      showed codesign demanding a signature for every file it reads as
+      nested code, which includes the shebang lines the stdlib carries on
+      `pdb.py`, `tarfile.py` and two dozen more; under `Resources` they are
+      sealed by hash into the app's own signature instead — signs every
+      Mach-O inside it (the
       interpreter, `libpython`, stdlib extension modules) inside-out with
       the same identity as the rest of the bundle, ad-hoc until a Developer
       ID exists, and the launcher prefers that interpreter to create the
@@ -377,17 +382,27 @@ project and fatal to the people who download it.
       `com.apple.security.cs.disable-library-validation`, which a hardened
       interpreter needs to load pip-installed extension modules that Apple
       did not sign with our Team ID; `RELEASING.md` records that now so the
-      signed release does not rediscover it. Build size grows by roughly
-      30 MB compressed. `find_python` remains as the fallback for `./run.sh`.
-- [ ] `feat/avfoundation-decode`: the helper gains
+      signed release does not rediscover it. The standard library is
+      compiled at build time and the launcher sets
+      `PYTHONDONTWRITEBYTECODE`: the archive ships almost no bytecode, and
+      the second CI run showed the first import writing `__pycache__` into
+      the bundle and breaking the signature it had just verified. Build size
+      grows by roughly 30 MB compressed. `find_python` remains as the
+      fallback for `./run.sh`.
+- [x] `feat/avfoundation-decode`: the helper gains
       `--decode <input> <output.wav>` using `AVAssetReader` to produce
       16 kHz mono 16-bit PCM. The launcher exports the helper's path as
       `QWEN_SCRIBE_DECODER`; the server uses it for every format AVFoundation
       handles (mp3, m4a, aac, mp4, mov, m4v, aiff, flac, qta) and falls back
-      to ffmpeg only for mkv, webm, ogg, opus, and wma. The "ffmpeg missing"
-      messages shrink to those five formats. Tests cover decoder selection
-      by suffix and the error path when neither decoder exists.
-- [ ] `ci/bundled-runtime-check`: the Mac checks workflow gains a job that
+      to ffmpeg only for avi, mkv, webm, ogg, opus, and wma. The "ffmpeg
+      missing" messages shrink to those six formats. Tests cover decoder selection
+      by suffix and the error path when neither decoder exists. The third
+      CI run showed the cost of a helper no Linux check can compile: the
+      sample-buffer functions are CoreMedia's, the link line named every
+      other framework, and all three macOS jobs died at the same step. A
+      table of the frameworks that provide the functions the source calls
+      now stands in for the compiler that is not there.
+- [x] `ci/bundled-runtime-check`: the Mac checks workflow gains a job that
       starts the built app with every other Python removed from `PATH` and
       Homebrew's directories hidden, proving the launcher creates the
       environment from the bundled interpreter, and `codesign --verify
@@ -446,6 +461,13 @@ works", plus the release.
       "For developers" line. Refresh `docs/assets` screenshots to the
       current interface, including the Open Anyway prompt. Add an "Install
       matrix" section to `RELEASING.md`.
+- [ ] `fix/cjk-word-count`: the WebKit screenshots from week 6 show a
+      Japanese transcript listed as "1 words" — `history.py` and the page
+      both count `text.split()`, which is one run of characters for a
+      language that does not space its words. `compare_models.words()`
+      already splits CJK per character; the counter should use the same
+      rule, and the label should not say "1 words". Stored counts stay as
+      they are until a transcript is saved again.
 - [ ] `release/v0.4.0-beta.1`: changelog, version bump, roadmap ticks
       (self-contained runtime and quantized models are new roadmap lines and
       are recorded as shipped).

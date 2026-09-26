@@ -15,7 +15,7 @@ from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
-from . import cleanup, config, history, models, sessions, settings
+from . import cleanup, config, decode, history, models, sessions, settings
 
 # Where a job came from. The page uploads files; the native helper sends its
 # recordings as dictation, which is what lets the history opt-out apply to
@@ -242,11 +242,12 @@ def _run_job(job_id: str) -> None:
             draft_model = sessions.get_session("0.6b").model
 
         _update(job_id, detail="Decoding audio")
-        from mlx_qwen3_asr.audio import load_audio_np
         from mlx_qwen3_asr.chunking import split_audio_into_chunks
 
-        SR = 16000
-        audio = load_audio_np(str(path), sr=SR)  # ffmpeg handles video too
+        SR = decode.SAMPLE_RATE
+        # A 16 kHz mono WAV is read here; other formats go through the app's
+        # own decoder, and only what AVFoundation will not read needs ffmpeg.
+        audio = decode.to_waveform(path)
         # Decoding a 4 GB video takes minutes and cannot be interrupted, so a
         # cancel that arrived during it has been waiting all that time. Check
         # before starting on the GPU rather than at the first chunk boundary.

@@ -23,6 +23,7 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from qwen_scribe import api, config, jobs, sessions, settings
+from support import install_fake_modules
 
 BASE_URL = "http://127.0.0.1:8990"
 WAV = b"RIFF\x00\x00\x00\x00WAVEfmt "
@@ -81,16 +82,11 @@ class WorkerTestCase(unittest.TestCase):
         ]
         package.audio = audio
         package.chunking = chunking
-        modules = mock.patch.dict(
-            sys.modules,
-            {
-                "mlx_qwen3_asr": package,
-                "mlx_qwen3_asr.audio": audio,
-                "mlx_qwen3_asr.chunking": chunking,
-            },
-        )
-        modules.start()
-        self.addCleanup(modules.stop)
+        install_fake_modules(self, {
+            "mlx_qwen3_asr": package,
+            "mlx_qwen3_asr.audio": audio,
+            "mlx_qwen3_asr.chunking": chunking,
+        })
 
     def stage_job(self, **overrides) -> str:
         """Create a job record with a real staged upload file behind it."""

@@ -15,7 +15,7 @@ from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 from qwen_scribe import config, models, sessions
-from test_sessions import install_fake_modules
+from support import install_fake_modules
 
 
 def use_temporary_store(test) -> Path:

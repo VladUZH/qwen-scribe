@@ -1360,6 +1360,150 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
 
 @end
 
+// ── Decoding media without ffmpeg ────────────────────────────────────────
+// AVFoundation reads what a Mac can play; the server calls this instead of
+// ffmpeg for those formats, so a Mac with no Homebrew can still transcribe
+// an .m4a. The output is exactly what the model wants — 16 kHz mono signed
+// 16-bit PCM in a plain WAV — which the server can then read with nothing
+// but Python's own `wave` module.
+static const double QSDecodeSampleRate = 16000.0;
+
+static BOOL QSWriteWaveHeader(FILE *file, uint32_t dataBytes) {
+    const uint32_t sampleRate = (uint32_t)QSDecodeSampleRate;
+    const uint16_t channels = 1, bitsPerSample = 16;
+    const uint32_t byteRate = sampleRate * channels * bitsPerSample / 8;
+    const uint16_t blockAlign = channels * bitsPerSample / 8;
+    struct __attribute__((packed)) {
+        char riff[4]; uint32_t riffSize; char wave[4];
+        char fmt[4]; uint32_t fmtSize; uint16_t format; uint16_t channels;
+        uint32_t sampleRate; uint32_t byteRate; uint16_t blockAlign; uint16_t bits;
+        char data[4]; uint32_t dataSize;
+    } header = {
+        {'R','I','F','F'}, OSSwapHostToLittleInt32(36 + dataBytes), {'W','A','V','E'},
+        {'f','m','t',' '}, OSSwapHostToLittleInt32(16), OSSwapHostToLittleInt16(1),
+        OSSwapHostToLittleInt16(channels), OSSwapHostToLittleInt32(sampleRate),
+        OSSwapHostToLittleInt32(byteRate), OSSwapHostToLittleInt16(blockAlign),
+        OSSwapHostToLittleInt16(bitsPerSample),
+        {'d','a','t','a'}, OSSwapHostToLittleInt32(dataBytes),
+    };
+    return fwrite(&header, sizeof(header), 1, file) == 1;
+}
+
+static int QSDecodeToWave(const char *inputPath, const char *outputPath) {
+    NSURL *inputURL = [NSURL fileURLWithPath:[NSString stringWithUTF8String:inputPath]];
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:inputURL options:nil];
+
+    // The synchronous track accessors are deprecated; load them and wait.
+    __block NSArray<AVAssetTrack *> *tracks = nil;
+    __block NSError *loadError = nil;
+    dispatch_semaphore_t loaded = dispatch_semaphore_create(0);
+    [asset loadTracksWithMediaType:AVMediaTypeAudio
+                completionHandler:^(NSArray<AVAssetTrack *> *found, NSError *error) {
+        tracks = found;
+        loadError = error;
+        dispatch_semaphore_signal(loaded);
+    }];
+    dispatch_semaphore_wait(loaded, DISPATCH_TIME_FOREVER);
+    if (loadError != nil) {
+        fprintf(stderr, "Could not read %s: %s\n", inputPath,
+                loadError.localizedDescription.UTF8String);
+        return 3;
+    }
+    if (tracks.count == 0) {
+        fprintf(stderr, "%s has no audio track.\n", inputPath);
+        return 4;
+    }
+
+    NSError *error = nil;
+    AVAssetReader *reader = [AVAssetReader assetReaderWithAsset:asset error:&error];
+    if (reader == nil) {
+        fprintf(stderr, "Could not open %s: %s\n", inputPath, error.localizedDescription.UTF8String);
+        return 3;
+    }
+    // A mono channel layout is what makes AVFoundation downmix rather than
+    // refuse a stereo or 5.1 source.
+    AudioChannelLayout monoLayout = {0};
+    monoLayout.mChannelLayoutTag = kAudioChannelLayoutTag_Mono;
+    AVAssetReaderTrackOutput *output = [AVAssetReaderTrackOutput
+        assetReaderTrackOutputWithTrack:tracks.firstObject
+                        outputSettings:@{
+        AVFormatIDKey: @(kAudioFormatLinearPCM),
+        AVSampleRateKey: @(QSDecodeSampleRate),
+        AVNumberOfChannelsKey: @1,
+        AVChannelLayoutKey: [NSData dataWithBytes:&monoLayout length:sizeof(monoLayout)],
+        AVLinearPCMBitDepthKey: @16,
+        AVLinearPCMIsFloatKey: @NO,
+        AVLinearPCMIsBigEndianKey: @NO,
+        AVLinearPCMIsNonInterleaved: @NO,
+    }];
+    if (![reader canAddOutput:output]) {
+        fprintf(stderr, "AVFoundation cannot decode %s to 16 kHz mono PCM.\n", inputPath);
+        return 5;
+    }
+    [reader addOutput:output];
+    if (![reader startReading]) {
+        fprintf(stderr, "Could not start decoding %s: %s\n", inputPath,
+                reader.error.localizedDescription.UTF8String);
+        return 3;
+    }
+
+    FILE *file = fopen(outputPath, "wb");
+    if (file == NULL) {
+        fprintf(stderr, "Could not write %s.\n", outputPath);
+        return 6;
+    }
+    // The sizes are only known at the end; the header is rewritten then.
+    if (!QSWriteWaveHeader(file, 0)) {
+        fclose(file);
+        fprintf(stderr, "Could not write the WAV header to %s.\n", outputPath);
+        return 6;
+    }
+
+    uint32_t written = 0;
+    int status = 0;
+    CMSampleBufferRef sample = NULL;
+    while ((sample = [output copyNextSampleBuffer]) != NULL) {
+        CMBlockBufferRef block = CMSampleBufferGetDataBuffer(sample);
+        if (block != NULL) {
+            size_t length = CMBlockBufferGetDataLength(block);
+            if (length > 0) {
+                void *bytes = malloc(length);
+                if (bytes == NULL) {
+                    status = 6;
+                } else if (CMBlockBufferCopyDataBytes(block, 0, length, bytes) != kCMBlockBufferNoErr
+                           || fwrite(bytes, 1, length, file) != length) {
+                    status = 6;
+                } else {
+                    written += (uint32_t)length;
+                }
+                free(bytes);
+            }
+        }
+        CFRelease(sample);
+        if (status != 0) break;
+    }
+    if (status == 0 && reader.status != AVAssetReaderStatusCompleted) {
+        fprintf(stderr, "Decoding %s stopped early: %s\n", inputPath,
+                reader.error.localizedDescription.UTF8String ?: "unknown reason");
+        status = 3;
+    }
+    if (status == 0 && written == 0) {
+        fprintf(stderr, "%s decoded to no audio at all.\n", inputPath);
+        status = 4;
+    }
+    if (status == 0) {
+        rewind(file);
+        if (!QSWriteWaveHeader(file, written)) status = 6;
+    }
+    if (fclose(file) != 0) status = status ?: 6;
+    if (status != 0) {
+        unlink(outputPath);
+        return status;
+    }
+    printf("%u\n", written / 2);   // frames, for whoever wants to check
+    return 0;
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         if (argc > 1 && strcmp(argv[1], "--check") == 0) {
@@ -1375,6 +1519,9 @@ int main(int argc, const char *argv[]) {
                    inputMonitoring ? "granted" : "missing",
                    microphone ? "granted" : "missing");
             return 0;
+        }
+        if (argc > 3 && strcmp(argv[1], "--decode") == 0) {
+            return QSDecodeToWave(argv[2], argv[3]);
         }
         if (argc > 2 && strcmp(argv[1], "--render-hud") == 0) {
             NSApplication *application = NSApplication.sharedApplication;

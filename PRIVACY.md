@@ -18,7 +18,10 @@ key.
   the file-transcription options, including the domain vocabulary. They
   contain no audio, recordings, or transcripts.
 - The app's Python runtime lives in
-  `~/Library/Application Support/Qwen Scribe/runtime`.
+  `~/Library/Application Support/Qwen Scribe/runtime`. The interpreter it is
+  built from ships inside the app itself, so nothing is downloaded to get
+  one; the pinned dependencies in that environment still come from PyPI on
+  first launch, as before.
 - Diagnostic output is written to `~/Library/Logs/QwenScribe.log` and may
   contain media filenames, local paths, dependency output, and error messages.
 - Downloaded model weights normally live in the Hugging Face cache, usually

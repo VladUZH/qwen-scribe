@@ -32,6 +32,20 @@ fi
 rm -rf "$APP" "$STOP_APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/static" "$STOP_APP/Contents/MacOS"
 
+# The app carries its own interpreter, so a Mac needs no Python of its own.
+# BUNDLE_PYTHON=0 builds without it — offline, and quick for a local edit —
+# and the launcher then falls back to looking for a system Python as before.
+#
+# In Resources rather than Frameworks: codesign treats everything under
+# Frameworks as nested code and demands a signature for each file it thinks
+# is executable, which includes the shebang lines on stdlib modules like
+# pdb.py and tarfile.py. Under Resources those are sealed by hash into the
+# app's own signature, which is the protection that actually matters, and
+# the Mach-O files inside are still signed individually below.
+if [[ "${BUNDLE_PYTHON:-1}" == "1" ]]; then
+  "$ROOT/scripts/bundle_python.sh" "$APP/Contents/Resources/Python"
+fi
+
 cp "$ROOT/macos/launcher.sh" "$APP/Contents/Resources/launch-server.sh"
 cp "$ROOT/macos/QwenScribe-Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/assets/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
@@ -49,8 +63,50 @@ chmod +x "$APP/Contents/Resources/launch-server.sh" "$STOP_APP/Contents/MacOS/St
 clang -fobjc-arc -arch arm64 -mmacosx-version-min=14.0 -Wall -Wextra \
   -Wno-unused-parameter \
   -framework Cocoa -framework ApplicationServices -framework AVFoundation \
-  -framework AudioToolbox -framework IOKit -framework ServiceManagement \
+  -framework AudioToolbox -framework CoreMedia -framework IOKit \
+  -framework ServiceManagement \
   "$ROOT/native/DictationHelper.m" -o "$APP/Contents/MacOS/QwenScribe"
+
+# Before signing, and never after: running the interpreter is what would
+# write bytecode into the bundle and invalidate the signature that seals it.
+# The runtime is precompiled by bundle_python.sh for the same reason.
+RUNTIME="$APP/Contents/Resources/Python"
+if [[ -x "$RUNTIME/bin/python3" ]]; then
+  PYTHONDONTWRITEBYTECODE=1 "$RUNTIME/bin/python3" - <<'PYCHECK'
+import sqlite3, ssl, sys, venv    # noqa: F401  (imported to prove they load)
+assert sys.version_info[:2] == (3, 12), sys.version
+PYCHECK
+  echo "Bundled interpreter runs: $(PYTHONDONTWRITEBYTECODE=1 "$RUNTIME/bin/python3" -V)"
+fi
+
+# Nested code is signed before the bundle that seals it: macOS reports an app
+# whose inner Mach-O files are unsigned, or signed with another identity, as
+# damaged rather than as a signing mistake.
+if [[ -d "$RUNTIME" ]]; then
+  RUNTIME_BINARIES=()
+  while IFS= read -r -d '' candidate; do
+    if file -b "$candidate" | grep -q '^Mach-O'; then
+      RUNTIME_BINARIES+=("$candidate")
+    fi
+  done < <(find "$RUNTIME" -type f -print0)
+  if [[ ${#RUNTIME_BINARIES[@]} -eq 0 ]]; then
+    echo "The bundled runtime contains no Mach-O files; the archive layout changed." >&2
+    exit 1
+  fi
+  for binary in "${RUNTIME_BINARIES[@]}"; do
+    if [[ "$IDENTITY" == "-" ]]; then
+      codesign --force --sign - "$binary"
+    elif [[ "$binary" == */bin/python3.12 ]]; then
+      # Only the interpreter needs it, and only when hardened: see the
+      # comment in macos/QwenScribePython.entitlements.
+      codesign --force --options runtime --timestamp \
+        --entitlements "$ROOT/macos/QwenScribePython.entitlements" --sign "$IDENTITY" "$binary"
+    else
+      codesign --force --options runtime --timestamp --sign "$IDENTITY" "$binary"
+    fi
+  done
+  echo "Signed ${#RUNTIME_BINARIES[@]} Mach-O files in the bundled runtime."
+fi
 
 for plist in "$APP/Contents/Info.plist" "$STOP_APP/Contents/Info.plist"; do
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$plist"

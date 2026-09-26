@@ -11,7 +11,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, Response, Uploa
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, dictation, history, jobs, models, settings
+from . import config, decode, dictation, history, jobs, models, settings
 
 TRANSCRIPT_NOT_FOUND = "Transcript not found"
 UPLOAD_GONE = "The uploaded file is no longer available — upload it again"
@@ -102,6 +102,10 @@ def get_config() -> dict:
         "languages": config.LANGUAGES,
         "extensions": sorted(config.ALLOWED_SUFFIXES),
         "ffmpeg": shutil.which("ffmpeg") is not None,
+        # The app's own decoder covers everything but the five formats
+        # AVFoundation will not read, so the page can say which.
+        "decoder": decode.helper() is not None,
+        "ffmpeg_formats": sorted(suffix.lstrip(".") for suffix in decode.FFMPEG_SUFFIXES),
     }
 
 
@@ -201,11 +205,8 @@ async def create_job(
                  f"Supported: {', '.join(sorted(config.ALLOWED_SUFFIXES))}"
         )
 
-    if suffix != ".wav" and shutil.which("ffmpeg") is None:
-        raise HTTPException(
-            400, "ffmpeg is required for non-WAV files. Install it with Homebrew "
-                 "(brew install ffmpeg) or MacPorts (sudo port install ffmpeg)."
-        )
+    if decode.needs_ffmpeg(suffix) and shutil.which("ffmpeg") is None:
+        raise HTTPException(400, decode.ffmpeg_required_message(suffix))
 
     # Starlette already knows the size of a fully parsed UploadFile. Avoid a
     # second multi-gigabyte copy when that value is over the application limit;
