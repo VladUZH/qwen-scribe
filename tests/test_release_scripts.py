@@ -134,6 +134,7 @@ class HelperLinkTests(unittest.TestCase):
         "AVFoundation": r"\bAV(?:URLAsset|AssetReader|AudioRecorder|CaptureDevice)\b",
         "ApplicationServices": r"\bCGEvent(?:Post|Create\w+|SourceCreate)\b",
         "Cocoa": r"\bNS(?:Application|StatusItem|Window)\b",
+        "Carbon": r"\b(?:RegisterEventHotKey|InstallApplicationEventHandler)\b",
         "CoreMedia": r"\bCM(?:SampleBuffer|BlockBuffer|Time)\w*\b",
         "IOKit": r"\bIOHID\w+\b",
         "ServiceManagement": r"\bSMAppService\b",

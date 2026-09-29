@@ -8,6 +8,13 @@ details when clearly documented.
 
 ### Added
 
+- **Paste Last Dictation** with **Control-Command-V** or the menu bar: recover
+  the latest successful desktop dictation in the currently focused text field,
+  even after a missed automatic insertion or a clipboard change. The native
+  helper keeps one nonempty result in memory until replaced or the app quits,
+  including when history is disabled. Recording/transcription is never
+  interrupted, and a shortcut conflict leaves the menu action available.
+
 - The app carries its own Python. A Mac with no Python installed can now run
   it: `Contents/Resources/Python` holds a pinned, SHA-256-verified
   `python-build-standalone` 3.12 build, and the launcher makes the private

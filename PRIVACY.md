@@ -38,9 +38,13 @@ key.
 - Desktop dictation is recorded into a temporary WAV file and deleted after
   transcription or failure. Its completed transcript is saved in history like
   any other completed job, unless **Save dictations to history** is switched
-  off in the dictation settings. Then the text is held in memory only until
-  the helper has collected and pasted it, at most a minute, and is never
-  written to disk.
+  off in the dictation settings. Then the server retains the text only until
+  the helper has collected it, at most a minute, and never writes it to disk.
+  Independently of history, the native helper keeps the latest nonempty
+  successful dictation in memory for **Paste Last Dictation** (Control-Command-V).
+  That copy survives clipboard changes and history deletion, but is replaced
+  by the next successful dictation and cleared when the app quits. It is not
+  written to disk or restored from history on launch.
 
 Transcript files are not encrypted by Qwen Scribe. macOS permissions, disk
 encryption, backups, and other local accounts determine who else can read them.
@@ -71,7 +75,9 @@ Desktop dictation is optional and requests:
   key's up and down state from the keyboard's own reports, and nothing else
   from them. It does not implement a text key logger.
 - **Accessibility:** sends Command-V to the application that was focused when
-  dictation began.
+  dictation began, or to the currently focused application when you invoke
+  **Paste Last Dictation**. Control-Command-V is registered as a system hotkey;
+  it does not require monitoring ordinary typing.
 
 To paste without permanently replacing the clipboard, the helper temporarily
 copies the current pasteboard items into process memory, inserts the transcript,

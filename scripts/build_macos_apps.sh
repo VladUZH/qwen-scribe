@@ -62,7 +62,7 @@ chmod +x "$APP/Contents/Resources/launch-server.sh" "$STOP_APP/Contents/MacOS/St
 
 clang -fobjc-arc -arch arm64 -mmacosx-version-min=14.0 -Wall -Wextra \
   -Wno-unused-parameter \
-  -framework Cocoa -framework ApplicationServices -framework AVFoundation \
+  -framework Cocoa -framework Carbon -framework ApplicationServices -framework AVFoundation \
   -framework AudioToolbox -framework CoreMedia -framework IOKit \
   -framework ServiceManagement \
   "$ROOT/native/DictationHelper.m" -o "$APP/Contents/MacOS/QwenScribe"
