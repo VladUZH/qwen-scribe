@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import <Carbon/Carbon.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
@@ -76,6 +77,7 @@ typedef NS_ENUM(NSInteger, QSHUDState) {
     QSHUDStateLoading,       // the server is loading (or first downloading) the model
     QSHUDStateInserted,
     QSHUDStateError,
+    QSHUDStateNoDictation,
 };
 
 // Wide enough for "Loading model…" followed by "1.2 of 3.4 GB".
@@ -144,6 +146,10 @@ static const CGFloat QSHUDHeight = 50;
         case QSHUDStateInserted:
             accent = [NSColor colorWithRed:0.44 green:0.82 blue:0.59 alpha:1];
             label = @"Text inserted";
+            break;
+        case QSHUDStateNoDictation:
+            accent = [NSColor colorWithWhite:0.7 alpha:1];
+            label = @"No previous dictation";
             break;
         default:
             accent = [NSColor colorWithRed:0.90 green:0.39 blue:0.44 alpha:1];
@@ -259,7 +265,7 @@ static const CGFloat QSHUDHeight = 50;
         self.panel.alphaValue = 1;
     }
 
-    if (state == QSHUDStateInserted || state == QSHUDStateError) {
+    if (state == QSHUDStateInserted || state == QSHUDStateError || state == QSHUDStateNoDictation) {
         NSInteger expectedGeneration = self.generation;
         NSTimeInterval delay = state == QSHUDStateInserted ? 0.9 : 1.35;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
@@ -285,6 +291,11 @@ static const CGFloat QSHUDHeight = 50;
 @interface QSDictationDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @property (nonatomic, strong) id globalMonitor;
 @property (nonatomic, strong) id localMonitor;
+@property (nonatomic) EventHotKeyRef pasteLastHotkey;
+@property (nonatomic) EventHandlerRef pasteLastHandler;
+// Independent of the clipboard and history; replaced only by a nonempty result.
+@property (nonatomic, copy) NSString *lastDictationText;
+- (void)pasteLastDictation:(id)sender;
 @property (nonatomic, strong) NSTimer *heartbeatTimer;
 @property (nonatomic, strong) NSTimer *recordingWatchdog;
 @property (nonatomic, strong) dispatch_source_t terminationSource;
@@ -358,6 +369,17 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
     dispatch_async(dispatch_get_main_queue(), ^{ [delegate handleFnKey:isDown]; });
 }
 
+static OSStatus QSPasteLastHotkeyHandler(EventHandlerCallRef handler, EventRef event, void *context) {
+    EventHotKeyID identifier;
+    OSStatus status = GetEventParameter(event, kEventParamDirectObject, typeEventHotKeyID,
+                                       NULL, sizeof(identifier), NULL, &identifier);
+    if (status != noErr || identifier.signature != 'QSLP' || identifier.id != 1) {
+        return eventNotHandledErr;
+    }
+    [(__bridge QSDictationDelegate *)context pasteLastDictation:nil];
+    return noErr;
+}
+
 @implementation QSDictationDelegate
 
 - (NSString *)dictationPIDFile {
@@ -429,6 +451,7 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
     [self installTerminationHandler];
     [self sweepStrandedRecordings];
     [self installStatusItem];
+    [self installPasteLastHotkey];
 
     NSDictionary *accessibilityOptions = @{
         (__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES
@@ -470,6 +493,11 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
 /// "Stop Qwen Scribe" sends, which never reaches applicationWillTerminate:.
 - (void)tearDown {
     self.shuttingDown = YES;
+    self.lastDictationText = nil;
+    if (self.pasteLastHotkey) UnregisterEventHotKey(self.pasteLastHotkey);
+    if (self.pasteLastHandler) RemoveEventHandler(self.pasteLastHandler);
+    self.pasteLastHotkey = NULL;
+    self.pasteLastHandler = NULL;
     [self.recorder stop];
     self.recorder = nil;
     [self.hud hide];
@@ -804,12 +832,7 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
         if ([status isEqualToString:@"done"]) {
             NSDictionary *result = [state[@"result"] isKindOfClass:NSDictionary.class] ? state[@"result"] : nil;
             NSString *text = [result[@"text"] isKindOfClass:NSString.class] ? result[@"text"] : nil;
-            text = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-            if (text.length == 0) {
-                [weakSelf reportFailure:@"No speech detected"];
-                return;
-            }
-            dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf pasteText:text]; });
+            dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf completeDictationWithText:text]; });
         } else if ([status isEqualToString:@"error"]) {
             [weakSelf reportFailure:state[@"detail"] ?: @"Transcription failed"];
         } else {
@@ -844,6 +867,62 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
         self.hud.view.detail = figure;
         self.hud.view.needsDisplay = YES;
     }
+}
+
+// ── Recover the last dictation without relying on the clipboard ──────────
+
+- (void)installPasteLastHotkey {
+    // A registered shortcut consumes the chord instead of also invoking the
+    // frontmost app's Control-Command-V. Key release avoids autorepeat; the
+    // paste bridge below still waits for Control and other modifiers to clear.
+    EventTypeSpec type = {kEventClassKeyboard, kEventHotKeyReleased};
+    EventHandlerRef handler = NULL;
+    OSStatus status = InstallApplicationEventHandler(QSPasteLastHotkeyHandler, 1, &type,
+                                                     (__bridge void *)self, &handler);
+    EventHotKeyRef hotkey = NULL;
+    if (status == noErr) {
+        EventHotKeyID identifier = {'QSLP', 1};
+        status = RegisterEventHotKey(QSPasteKeyCode, controlKey | cmdKey, identifier,
+                                     GetApplicationEventTarget(), kEventHotKeyExclusive, &hotkey);
+    }
+    if (status != noErr) {
+        if (handler) RemoveEventHandler(handler);
+        fprintf(stderr, "Qwen Scribe: could not register Control-Command-V (%d); use Paste Last Dictation in the menu bar\n",
+                (int)status);
+        return;
+    }
+    self.pasteLastHandler = handler;
+    self.pasteLastHotkey = hotkey;
+}
+
+- (void)completeDictationWithText:(NSString *)text {
+    if (self.shuttingDown) return;
+    text = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!text.length) {
+        [self reportFailure:@"No speech detected"];
+        return;
+    }
+    // Cache before attempting insertion: a posted Command-V is not proof
+    // that an editable field actually received the text.
+    self.lastDictationText = text;
+    [self pasteText:text];
+}
+
+- (void)pasteLastDictation:(id)sender {
+    if (self.shuttingDown) return;
+    // Reuse the existing paste state only while idle. Never interrupt an
+    // active recording, replace its target, or race an automatic insertion.
+    if (self.busy || self.serverTransitionInProgress) {
+        [self playSound:@"Basso"];
+        return;
+    }
+    if (!self.lastDictationText.length) {
+        [self.hud showState:QSHUDStateNoDictation];
+        return;
+    }
+    self.targetApplication = NSWorkspace.sharedWorkspace.frontmostApplication;
+    self.busy = YES;
+    [self pasteText:self.lastDictationText];
 }
 
 /// Leave the transcript on the clipboard and tell the user why it was not typed.
@@ -1149,6 +1228,14 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
                                                   action:@selector(openInterface:) keyEquivalent:@""];
     open.target = self;
     [menu addItem:open];
+
+    NSString *pasteTitle = self.pasteLastHotkey
+        ? @"Paste Last Dictation (⌃⌘V)" : @"Paste Last Dictation (shortcut unavailable)";
+    NSMenuItem *pasteLast = [[NSMenuItem alloc] initWithTitle:pasteTitle
+                                                     action:@selector(pasteLastDictation:) keyEquivalent:@""];
+    pasteLast.target = self;
+    pasteLast.enabled = self.lastDictationText.length > 0 && !self.busy && !self.serverTransitionInProgress;
+    [menu addItem:pasteLast];
 
     NSMenuItem *hotkeyRoot = [[NSMenuItem alloc] initWithTitle:@"Push-to-Talk Key"
                                                         action:nil keyEquivalent:@""];

@@ -51,6 +51,9 @@ transcript text stay on the Mac.
   Or switch to
   press-to-start, press-to-stop for longer dictation, with the HUD counting
   the seconds
+- **Control-Command-V** pastes the last successful dictation at the current
+  cursor, even if automatic insertion missed the text field or the clipboard
+  has since changed
 - Menu-bar status item with the dictation state, a push-to-talk key picker,
   and explicit restart and quit controls
 - A non-focus-stealing HUD for **Listening**, **Transcribing**, success, and
@@ -154,6 +157,29 @@ browser tab open at all.
 | Vocabulary hints | Up to 2000 characters, in **Settings → Transcription**. The hint is added to every chunk's prompt, so it is paid for once per chunk of the file. While one is set, the page says so above the dictation card, and that label opens the field |
 | Dictation settings | The push-to-talk key, mode, longest recording, model, language, dictionary, and history choice live in **Settings → Dictation** — the gear in the corner, or **Set up** on the dictation card — and apply within about ten seconds. In **Hold to talk** the key records while held; in **Press to start, press to stop** a tap starts and the next tap stops, while a press held longer than a tap still works as hold. A recording is stopped on its own at the configured limit, two minutes by default and ten at most. The dictionary is names and terms you dictate often; it is sent with every dictation as the model's vocabulary hint. Switch off **Save dictations to history** to keep dictations out of the saved transcripts entirely. Say "new line" or "new paragraph" on its own, between sentences, to get a break; **Replacements** turn a phrase you say into the text you want pasted, whole words only, so "my email" can become your address. These are separate from the model, language, and vocabulary used for file transcription |
 | Languages | Automatic detection, or any of the fourteen Qwen3-ASR supports. Word timestamps for Japanese and Korean use the tokenizers shipped in `requirements-lock.txt`; if the aligner cannot run, the transcript is still produced and saved, without the `.srt` |
+
+### Paste the last dictation again
+
+Click the text field you want, then press and release **Control-Command-V**
+(**⌃⌘V**). **Paste Last Dictation** in the menu bar does the same thing.
+Automatic insertion stays unchanged. The shortcut reuses the latest nonempty
+successful desktop dictation, not an uploaded file's transcript; failed or
+empty recordings do not replace it, and you can paste it more than once.
+
+The text is cached only in the native app's memory, independently of the
+clipboard and **Save dictations to history**. It is replaced by the next
+successful dictation and cleared when the app quits; it is not recovered from
+history on launch. Deleting a history entry does not clear this in-memory copy.
+The shortcut reports **No previous dictation** until there is something to paste.
+
+Wait for recording, transcription, and automatic insertion to finish before
+using it. Use the left Control and Command keys if a right-hand modifier is
+also your push-to-talk key, so the chord does not start another recording.
+Release the modifiers promptly: the paste bridge waits briefly for them to
+clear and cancels if focus or clipboard ownership changes. If another app
+already owns the shortcut, the menu marks it unavailable; the menu action
+still works. Accessibility permission is required for insertion, just as for
+automatic dictation.
 
 ## Desktop dictation permissions
 
