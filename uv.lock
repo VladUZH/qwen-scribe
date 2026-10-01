@@ -252,7 +252,7 @@ wheels = [
 
 [[package]]
 name = "mlx-qwen3-asr"
-version = "0.3.5"
+version = "0.4.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
@@ -260,9 +260,9 @@ dependencies = [
     { name = "numpy" },
     { name = "regex" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3d/c2/b53450ad34ec4960bbb108701e8268e109c12b9888b101ea22f94897ffb5/mlx_qwen3_asr-0.3.5.tar.gz", hash = "sha256:3b2932a6cc5e162d8a686434ee0ea63e86a294c845451496729a6f0f6a0df050", size = 244181, upload-time = "2026-05-16T00:26:23.504Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/33/43/e22f816218dafba76c3c5b58ef5a685e2c418368cccaa690f6804ca9cfc7/mlx_qwen3_asr-0.4.4.tar.gz", hash = "sha256:1431a900bd9e7c0ed5f0c7a021424bedb28fbb81dda1133685ba27d88bba39ff", size = 283264, upload-time = "2026-09-20T02:54:41.011Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7d/65/a450105650127e28c4467f834c8e71cdca422e62efa4161919bb1d94cd36/mlx_qwen3_asr-0.3.5-py3-none-any.whl", hash = "sha256:5c7169392a8d06f38ccc791b768cdc9e7fd6038a34130576c2af8b3afa28d06b", size = 168041, upload-time = "2026-05-16T00:26:21.879Z" },
+    { url = "https://files.pythonhosted.org/packages/52/34/739a65c4ce4c5de51e53a943fe75d8702a6259286cedef8f8eb7356e42d4/mlx_qwen3_asr-0.4.4-py3-none-any.whl", hash = "sha256:37e7db641c93e7eff9880af856d7492800e5559006671b5fa837184166d35630", size = 182115, upload-time = "2026-09-20T02:54:39.59Z" },
 ]
 
 [package.optional-dependencies]
@@ -403,9 +403,9 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = "==0.141.1" },
-    { name = "mlx-qwen3-asr", extras = ["aligner"], specifier = "==0.3.5" },
+    { name = "mlx-qwen3-asr", extras = ["aligner"], specifier = "==0.4.4" },
     { name = "python-multipart", specifier = "==0.0.32" },
-    { name = "uvicorn", specifier = "==0.52.4" },
+    { name = "uvicorn", specifier = "==0.54.0" },
 ]
 
 [[package]]
@@ -548,13 +548,13 @@ wheels = [
 
 [[package]]
 name = "uvicorn"
-version = "0.52.4"
+version = "0.54.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "h11" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f2/0f/3f86e61397dd33bf2ccf28188c40db6a740658aeebbbf6e7dbc101a1f487/uvicorn-0.52.4.tar.gz", hash = "sha256:73acfee47a0b133c5de13d219492d62d8a31e935f4fe6e41a232451a15379f86", size = 100627, upload-time = "2026-08-19T06:27:41.821Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/da/34/30e9280707135d2cfc589dfff3cb796bd07a3aeb1a3e415ba09dd89d7bb4/uvicorn-0.54.0.tar.gz", hash = "sha256:a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620", size = 112283, upload-time = "2026-09-25T06:52:37.601Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f1/79/4a20b54ab0491485ccd8c077db2d39187c7f12b3e15485d38a7be37c81b4/uvicorn-0.52.4-py3-none-any.whl", hash = "sha256:f86e41a149d7d05a9969337e3946a9c171c06a5d42680896daaba624aeac8da1", size = 79871, upload-time = "2026-08-19T06:27:40.36Z" },
+    { url = "https://files.pythonhosted.org/packages/38/0c/b54a4fdd7f90a3af8b02ebc9ce6712c2c208b7926a2f7bad95c33ebbe943/uvicorn-0.54.0-py3-none-any.whl", hash = "sha256:505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf", size = 87427, upload-time = "2026-09-25T06:52:35.829Z" },
 ]

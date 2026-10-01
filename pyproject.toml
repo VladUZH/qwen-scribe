@@ -10,9 +10,9 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
-  "mlx-qwen3-asr[aligner]==0.3.5",
+  "mlx-qwen3-asr[aligner]==0.4.4",
   "fastapi==0.141.1",
-  "uvicorn==0.52.4",
+  "uvicorn==0.54.0",
   "python-multipart==0.0.32",
 ]
 
