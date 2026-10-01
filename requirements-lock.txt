@@ -23,7 +23,7 @@ idna==3.19
 joblib==1.6.0
 mlx==0.32.2
 mlx-metal==0.32.2
-mlx-qwen3-asr==0.3.5
+mlx-qwen3-asr==0.4.4
 nagisa==0.3.0
 narwhals==2.25.0
 numpy==2.5.2
@@ -43,4 +43,4 @@ threadpoolctl==3.6.0
 tqdm==4.70.0
 typing-extensions==4.16.0
 typing-inspection==0.4.4
-uvicorn==0.52.4
+uvicorn==0.54.0
