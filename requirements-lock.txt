@@ -11,7 +11,7 @@ click==8.5.0
 cloudpickle==3.1.2
 cython==3.3.0
 dynet38==2.2
-fastapi==0.141.1
+fastapi==0.162.0
 filelock==3.32.5
 fsspec==2026.7.0
 h11==0.16.0
@@ -23,10 +23,11 @@ idna==3.19
 joblib==1.6.0
 mlx==0.32.2
 mlx-metal==0.32.2
-mlx-qwen3-asr==0.3.5
+mlx-qwen3-asr==0.4.4
 nagisa==0.3.0
 narwhals==2.25.0
 numpy==2.5.2
+opentelemetry-api==1.45.2
 packaging==26.3
 psutil==7.2.2
 pydantic==2.13.5
@@ -43,4 +44,4 @@ threadpoolctl==3.6.0
 tqdm==4.70.0
 typing-extensions==4.16.0
 typing-inspection==0.4.4
-uvicorn==0.52.4
+uvicorn==0.54.0
