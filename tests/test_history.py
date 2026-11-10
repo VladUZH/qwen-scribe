@@ -339,6 +339,12 @@ class LocalRequestSecurityTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_responses_forbid_caching_transcribed_text(self):
+        # The native helper once left dictated text in its on-disk URL cache.
+        for path in ("/api/config", "/api/jobs", "/api/transcripts", "/"):
+            response = self.client.get(path)
+            self.assertEqual(response.headers["cache-control"], "no-store", path)
+
     def test_rejected_requests_still_carry_security_headers(self):
         response = self.client.get("/api/config", headers={"Host": "malicious.example"})
         self.assertEqual(response.status_code, 400)

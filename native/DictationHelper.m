@@ -66,6 +66,34 @@ static const NSTimeInterval QSMaximumRecordingLimit = 600.0;
 // In toggle mode a press shorter than this is a tap; a longer one is a hold.
 static const NSTimeInterval QSToggleTapSeconds = 0.4;
 
+// How often the helper asks the server whether a dictation has finished. A
+// typical dictation decodes in under a second, so a coarse interval is a
+// visible share of the wait; a local GET costs the server next to nothing.
+static const NSTimeInterval QSPollIntervalSeconds = 0.1;
+// Give up on a dictation after ten minutes of polling.
+static const NSInteger QSMaximumPollAttempts = 6000;
+
+/// The one session every request to the local server goes through.
+///
+/// Never NSURLSession.sharedSession: it writes GET responses to
+/// ~/Library/Caches/<bundle id>/Cache.db, and the job-status response carries
+/// the dictated text. An ephemeral session with no URL cache keeps transcripts
+/// out of that file (and out of HTTPStorages) entirely.
+static NSURLSession *QSSession(void) {
+    static NSURLSession *session;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSURLSessionConfiguration *configuration =
+            NSURLSessionConfiguration.ephemeralSessionConfiguration;
+        configuration.URLCache = nil;
+        configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+        configuration.HTTPCookieStorage = nil;
+        configuration.HTTPShouldSetCookies = NO;
+        session = [NSURLSession sessionWithConfiguration:configuration];
+    });
+    return session;
+}
+
 static void QSAppendString(NSMutableData *data, NSString *string) {
     [data appendData:[string dataUsingEncoding:NSUTF8StringEncoding]];
 }
@@ -427,6 +455,12 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
     self.hud = [[QSDictationHUD alloc] init];
     [self writeProcessIdentity];
     [self installTerminationHandler];
+    // Builds before the ephemeral session left dictated text in the shared
+    // URL cache on disk. Empty it, and keep it from ever holding anything.
+    [NSURLCache.sharedURLCache removeAllCachedResponses];
+    NSURLCache.sharedURLCache = [[NSURLCache alloc] initWithMemoryCapacity:0
+                                                              diskCapacity:0
+                                                              directoryURL:nil];
     [self sweepStrandedRecordings];
     [self installStatusItem];
 
@@ -762,7 +796,7 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
     request.HTTPBody = body;
 
     __weak typeof(self) weakSelf = self;
-    [[NSURLSession.sharedSession dataTaskWithRequest:request
+    [[QSSession() dataTaskWithRequest:request
                                   completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         if (weakSelf.shuttingDown) return;
         NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
@@ -778,13 +812,13 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
 
 - (void)pollJob:(NSString *)jobID attempt:(NSInteger)attempt {
     if (self.shuttingDown) return;
-    if (attempt >= 1200) {
+    if (attempt >= QSMaximumPollAttempts) {
         [self reportFailure:@"Dictation timed out"];
         return;
     }
     NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"%@/api/jobs/%@", QSServerBase, jobID]];
     __weak typeof(self) weakSelf = self;
-    [[NSURLSession.sharedSession dataTaskWithURL:url
+    [[QSSession() dataTaskWithURL:url
                               completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         if (weakSelf.shuttingDown) return;
         NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
@@ -818,8 +852,8 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
             QSHUDState shown = [status isEqualToString:@"loading"] ? QSHUDStateLoading : QSHUDStateTranscribing;
             NSString *detail = [state[@"detail"] isKindOfClass:NSString.class] ? state[@"detail"] : nil;
             dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf showPolledState:shown detail:detail]; });
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(QSPollIntervalSeconds * NSEC_PER_SEC)),
+                           dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                 [weakSelf pollJob:jobID attempt:attempt + 1];
             });
         }
@@ -1025,7 +1059,7 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
     NSURL *url = [NSURL URLWithString:endpoint];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.HTTPMethod = @"POST";
-    [[NSURLSession.sharedSession dataTaskWithRequest:request] resume];
+    [[QSSession() dataTaskWithRequest:request] resume];
     [self fetchSettings];
     // Input Monitoring may have been granted since launch.
     if (inputMonitoring) [self openFnListener];
@@ -1036,7 +1070,7 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
 - (void)fetchSettings {
     NSURL *url = [NSURL URLWithString:[QSServerBase stringByAppendingString:@"/api/settings"]];
     __weak typeof(self) weakSelf = self;
-    [[NSURLSession.sharedSession dataTaskWithURL:url
+    [[QSSession() dataTaskWithURL:url
                               completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
         id payload = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
@@ -1090,7 +1124,7 @@ static void QSHIDValueChanged(void *context, IOReturn result, void *sender, IOHI
     request.HTTPBody = [NSJSONSerialization dataWithJSONObject:@{@"dictation": @{key: value}}
                                                        options:0 error:nil];
     __weak typeof(self) weakSelf = self;
-    [[NSURLSession.sharedSession dataTaskWithRequest:request
+    [[QSSession() dataTaskWithRequest:request
                                    completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
         id payload = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;

@@ -6,6 +6,15 @@ details when clearly documented.
 
 ## [Unreleased]
 
+### Security
+
+- Dictated text no longer lands in an on-disk HTTP cache. The native helper
+  used the shared `NSURLSession`, which stored job-status responses, transcript
+  included, in `~/Library/Caches/io.github.vladuzh.qwenscribe/Cache.db`, where
+  deleting the transcript in the app did not remove them. The helper now uses
+  an ephemeral session with no cache, empties the old cache on launch, and the
+  server marks every response `Cache-Control: no-store`
+
 ### Added
 
 - The app carries its own Python. A Mac with no Python installed can now run
@@ -28,6 +37,8 @@ details when clearly documented.
 
 ### Changed
 
+- The helper checks for a finished dictation every 0.1 s instead of every
+  0.5 s, so text is pasted up to 0.4 s sooner
 - The page is a drop zone again. It had grown to hold every control at once:
   three transcription options, twelve dictation and performance settings, and
   a note under each of two model pickers, all on screen together. What stays
