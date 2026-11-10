@@ -38,6 +38,10 @@ app = FastAPI(title="Qwen Scribe", docs_url=None, redoc_url=None, lifespan=lifes
 
 
 def _with_security_headers(response: Response) -> Response:
+    # Job and transcript responses carry transcribed speech. Without this a
+    # client's HTTP cache (the native helper's NSURLSession, a browser) may
+    # write them to disk, where deleting the transcript no longer reaches.
+    response.headers.setdefault("Cache-Control", "no-store")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("X-Frame-Options", "DENY")
