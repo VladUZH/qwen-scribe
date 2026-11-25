@@ -93,6 +93,8 @@ class DownloadTests(unittest.TestCase):
 
         def snapshot_download(repo_id, allow_patterns=None, tqdm_class=None, **kwargs):
             calls.snapshot = {"repo_id": repo_id, "allow_patterns": allow_patterns}
+            if tqdm_class is None:
+                return "/cache/snapshot"
             # One counter per file, as the real library does, plus the bar that
             # counts files rather than bytes and must be ignored.
             files_bar = tqdm_class(total=len(siblings), unit="it", desc="Fetching files")
@@ -160,6 +162,51 @@ class DownloadTests(unittest.TestCase):
         calls = self.install_fake_hub(siblings=[("model.safetensors", 100)], fail=True)
         sessions.ensure_downloaded("0.6b", progress=lambda *_: self.fail("no download expected"))
         self.assertIsNone(calls.snapshot)
+
+    def test_subdir_model_fetches_root_config_and_subpath_only(self):
+        calls = self.install_fake_hub(
+            siblings=[
+                ("config.json", 20),
+                ("model.safetensors", 4000),
+                ("Fourier-2B-Q8_0.gguf", 2000),
+                ("mlx/8bit/config.json", 30),
+                ("mlx/8bit/model.safetensors", 250),
+                ("mlx/8bit/vocab.json", 40),
+                ("mlx/8bit/merges.txt", 10),
+                ("mlx/8bit/README.md", 5),
+            ],
+        )
+        reports = []
+        sessions.ensure_downloaded(
+            "fourier-2b-8bit",
+            progress=lambda done, total: reports.append((done, total)),
+        )
+        self.assertEqual(calls.snapshot, {
+            "repo_id": "oruk/oruk-fourier-2b",
+            "allow_patterns": [
+                "config.json",
+                "mlx/8bit/*.json",
+                "mlx/8bit/*.safetensors",
+                "mlx/8bit/*.txt",
+                "mlx/8bit/*.model",
+            ],
+        })
+        # Root config.json (20) + mlx/8bit/{config.json(30), model.safetensors(250),
+        # vocab.json(40), merges.txt(10)} = 350 bytes; skips root safetensors and GGUF.
+        self.assertEqual(reports[0], (0, 350))
+        self.assertEqual(reports[-1], (350, 350))
+
+    def test_subdir_model_session_resolves_local_subpath(self):
+        calls = self.install_fake_hub(siblings=[("mlx/8bit/model.safetensors", 100)])
+        package = ModuleType("mlx_qwen3_asr")
+        package.Session = FakeSession
+        install_fake_modules(self, {"mlx_qwen3_asr": package})
+        FakeSession.instances = 0
+
+        sess = sessions.get_session("fourier-2b-8bit")
+        self.assertEqual(sess.model_id, str(Path("/cache/snapshot") / "mlx" / "8bit"))
+        self.assertEqual(calls.snapshot["repo_id"], "oruk/oruk-fourier-2b")
+        self.assertEqual(sessions.loaded_models(), ["fourier-2b-8bit"])
 
 
 if __name__ == "__main__":

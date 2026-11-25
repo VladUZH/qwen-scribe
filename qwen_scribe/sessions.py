@@ -31,8 +31,38 @@ def _model_id(model_key: str) -> str:
     return config.model_source(model_key)
 
 
+def weight_patterns(model_key: str) -> list[str]:
+    """Hub allow_patterns for a catalog entry.
+
+    Subdirectory-hosted checkpoints (such as ``oruk/oruk-fourier-2b`` under
+    ``mlx/8bit``) fetch repo-root ``config.json`` plus only their subpath
+    files so sibling precision exports in the same repository are not pulled.
+    """
+    subdir = config.model_subdir(model_key)
+    if not subdir:
+        return list(WEIGHT_PATTERNS)
+    return ["config.json", *(f"{subdir}/{pattern}" for pattern in WEIGHT_PATTERNS)]
+
+
 def _is_local(model_id: str) -> bool:
     return Path(model_id).exists()
+
+
+def resolve_model_target(model_key: str) -> str:
+    """Return the model argument to pass to ``mlx_qwen3_asr.Session``.
+
+    For standard Hub repos and local converted directories this is the model
+    source itself. For checkpoints nested inside a Hub repository subdirectory,
+    this resolves the cached snapshot and returns the local subdirectory path.
+    """
+    model_id = _model_id(model_key)
+    subdir = config.model_subdir(model_key)
+    if not subdir or _is_local(model_id):
+        return model_id
+    from huggingface_hub import snapshot_download
+
+    snapshot = snapshot_download(repo_id=model_id, allow_patterns=weight_patterns(model_key))
+    return str(Path(snapshot) / subdir)
 
 
 def get_session(model_key: str):
@@ -42,7 +72,7 @@ def get_session(model_key: str):
     model_id = _model_id(model_key)
     with _session_lock:
         if model_id not in _sessions:
-            _sessions[model_id] = Session(model=model_id)
+            _sessions[model_id] = Session(model=resolve_model_target(model_key))
         _last_used[model_id] = time.time()
         return _sessions[model_id]
 
@@ -111,12 +141,13 @@ def _release_memory() -> None:
 # First-run download with progress
 # ---------------------------------------------------------------------------
 
-def _download_plan(model_id: str) -> tuple[int, int]:
+def _download_plan(model_id: str, patterns: list[str] | None = None) -> tuple[int, int]:
     """(bytes still to fetch, total bytes) for the files the library wants.
 
     Any failure, an offline Mac included, answers (0, 0): the library's own
     fetch then behaves exactly as it always has, falling back to its cache.
     """
+    active_patterns = WEIGHT_PATTERNS if patterns is None else patterns
     try:
         from huggingface_hub import HfApi, try_to_load_from_cache
 
@@ -124,7 +155,7 @@ def _download_plan(model_id: str) -> tuple[int, int]:
         to_download = total = 0
         for sibling in info.siblings or []:
             name = sibling.rfilename
-            if not any(fnmatch.fnmatch(name, pattern) for pattern in WEIGHT_PATTERNS):
+            if not any(fnmatch.fnmatch(name, pattern) for pattern in active_patterns):
                 continue
             size = int(sibling.size or 0)
             total += size
@@ -195,7 +226,8 @@ def ensure_downloaded(model_key: str, progress=None) -> None:
     with _session_lock:
         if model_id in _sessions:
             return
-    to_download, total = _download_plan(model_id)
+    patterns = weight_patterns(model_key)
+    to_download, total = _download_plan(model_id, patterns)
     if to_download <= 0:
         return
     from huggingface_hub import snapshot_download
@@ -205,6 +237,6 @@ def ensure_downloaded(model_key: str, progress=None) -> None:
         progress(0, to_download)
     snapshot_download(
         repo_id=model_id,
-        allow_patterns=WEIGHT_PATTERNS,
+        allow_patterns=patterns,
         tqdm_class=reporter.tqdm_class(),
     )

@@ -12,6 +12,7 @@ when you ask for it. Nothing else is ever fetched; the supply-chain stance in
 | **1.7B 8-bit — fastest accurate** | the 1.7B quantized to 8 bits, group size 64 | about 1.9 GB | made on this Mac from the 1.7B weights |
 | **0.6B — speed** | `Qwen/Qwen3-ASR-0.6B`, fp16 | about 1.2 GB | Hugging Face, on first use |
 | **0.6B 4-bit — fastest** | the 0.6B quantized to 4 bits, group size 64 | about 0.5 GB | made on this Mac from the 0.6B weights |
+| **Fourier 2B 8-bit — English accuracy** | `oruk/oruk-fourier-2b` (`mlx/8bit`), 8-bit decoder + bf16 encoder (English-only, CC BY-NC 4.0) | about 2.5 GB | Hugging Face, on first use |
 
 The memory figures are what the loaded weights take in unified memory, in
 addition to normal application overhead. The picker shows the measured size
@@ -103,6 +104,7 @@ the HUD until it is ready.
 source .venv/bin/activate
 python compare_models.py meeting.m4a lecture.mp3        # every prepared variant
 python compare_models.py --variant 0.6b-4bit --language English interview.wav
+python compare_models.py --model fourier-2b-8bit --reference 1.7b --language English interview.wav
 ```
 
 For each file it transcribes with the fp16 model and the variant, prints both

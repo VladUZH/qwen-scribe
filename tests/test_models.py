@@ -63,17 +63,34 @@ class CatalogTests(unittest.TestCase):
     def test_catalog_lists_every_model_with_its_state(self):
         install_fake_modules(self, {"huggingface_hub": fake_hub({})})
         listing = {item["id"]: item for item in models.listing()}
-        self.assertEqual(list(listing), ["1.7b", "1.7b-8bit", "0.6b", "0.6b-4bit"])
+        self.assertEqual(
+            list(listing), ["1.7b", "1.7b-8bit", "0.6b", "0.6b-4bit", "fourier-2b-8bit"]
+        )
         self.assertEqual(listing["1.7b"]["state"], "downloadable")
         self.assertEqual(listing["1.7b-8bit"]["state"], "needs_conversion")
         self.assertEqual(listing["1.7b-8bit"]["base"], "1.7b")
         self.assertEqual(listing["1.7b-8bit"]["bits"], 8)
         self.assertEqual(listing["0.6b-4bit"]["bits"], 4)
         self.assertIsNone(listing["1.7b"]["bits"])
+        self.assertEqual(listing["fourier-2b-8bit"]["state"], "downloadable")
+        self.assertIsNone(listing["fourier-2b-8bit"]["bits"])
         for item in listing.values():
             self.assertIn(item["state"], models.STATES)
             self.assertGreater(item["memory_gb"], 0)
             self.assertFalse(item["loaded"])
+
+    def test_subdir_hub_model_is_ready_when_subpath_weights_are_cached(self):
+        snapshot = self.root / "fourier-snapshot"
+        sub = snapshot / "mlx" / "8bit"
+        sub.mkdir(parents=True)
+        (snapshot / "config.json").write_text("{}")
+        (sub / "config.json").write_text("{}")
+        (sub / "model.safetensors").write_bytes(b"\0")
+        install_fake_modules(
+            self, {"huggingface_hub": fake_hub({"oruk/oruk-fourier-2b": snapshot})}
+        )
+        self.assertEqual(models.state("fourier-2b-8bit"), "ready")
+        self.assertTrue(models.usable("fourier-2b-8bit"))
 
     def test_upstream_model_is_ready_once_its_weights_are_in_the_hub_cache(self):
         snapshot = self.root / "snapshot"
