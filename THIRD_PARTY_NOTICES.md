@@ -7,6 +7,7 @@ or first transcription; they are not vendored in this repository.
 | Component | Purpose | License |
 | --- | --- | --- |
 | [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) | Speech-recognition model and weights | Apache-2.0 |
+| [Oruk Fourier-2B](https://huggingface.co/oruk/oruk-fourier-2b) | Optional English speech-recognition model and weights | CC BY-NC 4.0 |
 | [mlx-qwen3-asr](https://github.com/moona3k/mlx-qwen3-asr) | Qwen3-ASR implementation for Apple Silicon | Apache-2.0 |
 | [MLX](https://github.com/ml-explore/mlx) | Apple Silicon machine-learning framework | MIT |
 | [FastAPI](https://github.com/fastapi/fastapi) | Local HTTP API | MIT |

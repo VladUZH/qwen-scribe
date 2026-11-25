@@ -58,12 +58,15 @@ class CatalogEndpointTests(PrepareTestCase):
         self.assertEqual(states, {
             "1.7b": "downloadable", "1.7b-8bit": "ready",
             "0.6b": "downloadable", "0.6b-4bit": "needs_conversion",
+            "fourier-2b-8bit": "downloadable",
         })
 
     def test_config_no_longer_claims_a_quantized_shim(self):
         body = self.client.get("/api/config").json()
         self.assertNotIn("quantized", body)
-        self.assertEqual(body["models"], ["1.7b", "1.7b-8bit", "0.6b", "0.6b-4bit"])
+        self.assertEqual(
+            body["models"], ["1.7b", "1.7b-8bit", "0.6b", "0.6b-4bit", "fourier-2b-8bit"]
+        )
 
     def test_prepare_queues_one_job_per_model(self):
         submit = self.hold_worker()
@@ -138,7 +141,8 @@ class CatalogEndpointTests(PrepareTestCase):
             self.assertEqual(response.json()["dictation"]["model"], "0.6b-4bit")
             warm_up.assert_not_called()
             self.assertEqual(
-                response.json()["options"]["models"], ["1.7b", "1.7b-8bit", "0.6b", "0.6b-4bit"]
+                response.json()["options"]["models"],
+                ["1.7b", "1.7b-8bit", "0.6b", "0.6b-4bit", "fourier-2b-8bit"],
             )
             write_converted("1.7b-8bit")
             self.client.put("/api/settings", json={"dictation": {"model": "1.7b-8bit"}})

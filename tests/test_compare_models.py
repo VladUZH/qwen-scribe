@@ -6,7 +6,7 @@ macOS runner, which is what the metric exists to compare.
 
 import unittest
 
-from compare_models import word_diff_rate, words
+from compare_models import comparison_pairs, word_diff_rate, words
 
 
 class TokenTests(unittest.TestCase):
@@ -59,6 +59,20 @@ class DiffRateTests(unittest.TestCase):
     def test_nothing_in_common_approaches_everything(self):
         rate, _spans = word_diff_rate("the meeting starts at three", "ハローワールド")
         self.assertGreater(rate, 0.9)
+
+
+class ComparisonPairTests(unittest.TestCase):
+    def test_model_pairs_compare_against_reference(self):
+        self.assertEqual(
+            comparison_pairs(candidates=["fourier-2b-8bit"], reference="1.7b"),
+            [("1.7b", "fourier-2b-8bit")],
+        )
+
+    def test_variant_pairs_compare_against_variant_base(self):
+        self.assertEqual(
+            comparison_pairs(variants=["0.6b-4bit"]),
+            [("0.6b", "0.6b-4bit")],
+        )
 
 
 if __name__ == "__main__":

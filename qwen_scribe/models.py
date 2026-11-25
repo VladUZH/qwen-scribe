@@ -76,7 +76,10 @@ def cached(model_id: str) -> bool:
     try:
         from huggingface_hub import try_to_load_from_cache
 
-        found = try_to_load_from_cache(config.MODEL_CATALOG[model_id]["repo"], "config.json")
+        entry = config.MODEL_CATALOG[model_id]
+        subdir = entry.get("subdir")
+        config_name = f"{subdir}/config.json" if subdir else "config.json"
+        found = try_to_load_from_cache(entry["repo"], config_name)
         if not isinstance(found, str):
             return False
         return any(Path(found).parent.glob("*.safetensors"))

@@ -68,8 +68,18 @@ MODEL_CATALOG = {
         "label": "0.6B 4-bit", "note": "fastest", "base": "0.6b",
         "bits": 4, "group_size": 64, "memory_gb": 0.5,
     },
+    "fourier-2b-8bit": {
+        "label": "Fourier 2B 8-bit", "note": "English accuracy",
+        "repo": "oruk/oruk-fourier-2b", "subdir": "mlx/8bit",
+        "memory_gb": 2.5,
+    },
 }
 DEFAULT_MODEL = "1.7b"
+
+
+def model_subdir(model_id: str) -> str | None:
+    """Subdirectory inside a Hub repository when weights live under a subpath."""
+    return MODEL_CATALOG[model_id].get("subdir")
 
 
 def model_source(model_id: str) -> str:
